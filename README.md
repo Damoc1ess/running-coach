@@ -1,4 +1,4 @@
-# Running Coach v2.0 - Polarized Data-Driven Training
+# Running Coach v2.2 - Polarized Data-Driven Training
 
 Automated running coach that generates personalized workouts based on your training data. Uses the **polarized 80/20 training model** backed by scientific research.
 
@@ -8,18 +8,23 @@ Automated running coach that generates personalized workouts based on your train
 
 ```
 Your Watch → Intervals.icu → Running Coach → Intervals.icu → Your Watch
-     ↑                                                           ↓
-     └───────────── Workout appears automatically ───────────────┘
+     ↑                              ↓                            ↓
+     │                    Analyzes today's data          Creates workout
+     │                                                   for TOMORROW
+     └──────────────── Workout syncs overnight ──────────────────┘
 ```
+
+**Key v2.2 feature**: Workouts are generated for **tomorrow** (not today), ensuring proper sync with Coros/Garmin watches.
 
 The algorithm analyzes:
 - Your training history (60 days)
 - Intensity distribution (21 days)
 - Current fitness (CTL/ATL/TSB)
-- Recovery since last hard session
+- ACWR (Acute:Chronic Workload Ratio) for injury prevention
+- LTHR from your Intervals.icu settings
 
 And automatically decides:
-- Whether it's a running day (every other day)
+- Whether **tomorrow** is a running day or rest day
 - Workout type (easy or hard)
 - Optimal duration
 - Estimated distance
@@ -41,9 +46,10 @@ Based on [Stephen Seiler's research](https://pubmed.ncbi.nlm.nih.gov/20861519/) 
 
 ## Decision Logic
 
+All decisions are made for **TOMORROW**, based on today's complete data.
+
 ```
-STEP 1: Running day? (100% data-driven)
-├── IF already ran today        → REST
+STEP 1: Should I run TOMORROW? (100% data-driven)
 ├── IF TSB < -25                → REST (overtraining)
 ├── IF ACWR > 1.5               → REST (injury risk)
 ├── IF TSB > 15 AND 3d+ rest    → RUN (detraining risk)
@@ -82,6 +88,7 @@ STEP 6: Estimate distance
 | Algorithm | Source | Purpose |
 |-----------|--------|---------|
 | **Fitness-Fatigue (PMC)** | Banister, 1975 | CTL/ATL/TSB calculation |
+| **ACWR** | Gabbett, 2016 | Injury risk prevention (>1.5 = rest) |
 | **Polarized Distribution** | Seiler, 2010 | 80% easy / 20% hard |
 | **HR Zones** | Joe Friel | 5 zones based on lactate threshold |
 | **ALB (Acute Load Balance)** | ACWR adapted | Limits daily load spikes |
@@ -173,21 +180,27 @@ python main.py
 
 ```
 ============================================================
-  RUNNING COACH v2.0.0 - Polarized Data-Driven
+  RUNNING COACH v2.2.1 - Polarized Data-Driven
 ============================================================
 
-📅 Date: 2026-01-16
+📅 Today: 2026-01-16
+📅 Planning for: 2026-01-17 (TOMORROW)
 
 📡 Fetching data...
-✓ 14 runs analyzed over 60 days
-✓ Max HR: 172, Threshold: 149
+✓ 15 runs analyzed over 60 days
+✓ Max HR: 172, LTHR: 167
 ✓ Avg Z2 pace: 7.3 min/km
 
 📊 Current state:
-  CTL: 10.6 | ATL: 13.9 | TSB: -3.3
+  CTL: 11.2 | ATL: 14.5 | TSB: -3.3
 
-🏃 Running day? 2 days since last run
-→ It's a RUNNING day!
+🏃 Analysis for TOMORROW (2026-01-17):
+  • TSB: -3.3
+  • ACWR: 1.29
+  • Days since run (tomorrow): 2
+  • → RUN tomorrow (TSB > -15 and 2d+ rest)
+
+🏃 TOMORROW is a RUNNING day!
 
 🎯 Target TSS: 39 (ALB cap)
 
@@ -199,6 +212,11 @@ python main.py
 
 📋 Selected workout: easy
 ⏱️  Duration: 45 min | Estimated distance: 6.2 km
+
+📝 Workout generated for TOMORROW:
+  Name: 39 TSS - Easy Endurance
+  Date: 2026-01-17
+  TSS: 39
 
 📤 Uploading to Intervals.icu...
 ✓ Workout created: 39 TSS - Easy Endurance
@@ -212,9 +230,11 @@ python main.py
 # Edit crontab
 crontab -e
 
-# Add line (runs at 6am daily)
-0 6 * * * cd /path/to/running-coach && source .env && python3 main.py >> log.txt 2>&1
+# Add line (runs at 9pm daily - after your runs are synced)
+0 21 * * * cd /path/to/running-coach && source .env && python3 main.py >> log.txt 2>&1
 ```
+
+**Why 9pm?** The script analyzes today's data to decide about tomorrow. Running it in the evening ensures all your daily activities are included in the analysis.
 
 ### GitHub Actions
 See `.github/workflows/daily_run.yml` for automated daily execution.
@@ -226,7 +246,12 @@ For workouts to appear on your watch:
 1. Go to **Intervals.icu Settings → Connections**
 2. Connect your watch brand (Coros, Garmin, etc.)
 3. Enable **"Upload planned workouts"**
-4. Workouts sync automatically to your watch
+4. Workouts sync automatically to your watch overnight
+
+**Important**: Coros only syncs **future** workouts. That's why v2.2 generates workouts for tomorrow, not today. The workflow is:
+- 9pm: Script runs, creates workout for tomorrow
+- Overnight: Coros syncs the workout
+- Morning: Workout appears on your watch
 
 ## Workout Templates
 
