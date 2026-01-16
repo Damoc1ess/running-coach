@@ -9,7 +9,7 @@ import re
 from datetime import date, timedelta, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # ==============================================================================
 # --- CONFIGURATION PAR DÉFAUT (peut être override par config.json) ---
@@ -344,19 +344,66 @@ class PolarizedEngine:
         self.tsb_recovery = ban_config.get('tsb_recovery_threshold', -25)
 
     def should_run_today(self):
-        """Détermine si c'est un jour de course (logique jour sur deux)."""
+        """Détermine si c'est un jour de course - 100% basé sur les données."""
+        tsb = self.wellness['tsb']
+        ctl = self.wellness['ctl']
+        atl = self.wellness['atl']
+
         last_run = self.analyzer.get_last_run_date()
-        if not last_run:
-            return True, "Aucun run récent trouvé"
+        days_since = (self.today - last_run).days if last_run else 999
 
-        days_since = (self.today - last_run).days
+        # Calcul du ratio charge aiguë/chronique (ACWR simplifié)
+        acwr = atl / ctl if ctl > 0 else 1.0
 
+        decision_factors = []
+        decision_factors.append(f"TSB: {tsb:.1f}")
+        decision_factors.append(f"ACWR: {acwr:.2f}")
+        decision_factors.append(f"Jours depuis run: {days_since}")
+
+        # === RÈGLES 100% DATA-DRIVEN ===
+
+        # RÈGLE 1: Déjà couru aujourd'hui → REPOS (évident)
         if days_since == 0:
-            return False, "Déjà couru aujourd'hui"
-        elif days_since == 1:
-            return False, "Couru hier - jour de repos"
-        else:
-            return True, f"{days_since} jours depuis dernier run"
+            return False, "Déjà couru aujourd'hui", decision_factors
+
+        # RÈGLE 2: TSB très négatif → REPOS (surentraînement)
+        if tsb < -25:
+            decision_factors.append("→ REPOS (TSB < -25, surentraînement)")
+            return False, f"TSB trop bas ({tsb:.1f}), récupération nécessaire", decision_factors
+
+        # RÈGLE 3: ACWR trop élevé → REPOS (risque blessure)
+        if acwr > 1.5:
+            decision_factors.append("→ REPOS (ACWR > 1.5, risque blessure)")
+            return False, f"ACWR trop élevé ({acwr:.2f}), risque de blessure", decision_factors
+
+        # RÈGLE 4: TSB très positif + plusieurs jours sans run → COURSE (désentraînement)
+        if tsb > 15 and days_since >= 3:
+            decision_factors.append("→ COURSE (TSB > 15, risque désentraînement)")
+            return True, f"Bien reposé (TSB {tsb:.1f}) et {days_since}j sans run", decision_factors
+
+        # RÈGLE 5: TSB positif → COURSE (récupéré)
+        if tsb > 5:
+            decision_factors.append("→ COURSE (TSB > 5, bien récupéré)")
+            return True, f"Récupéré (TSB {tsb:.1f})", decision_factors
+
+        # RÈGLE 6: TSB modérément négatif mais assez de repos → COURSE
+        if tsb > -15 and days_since >= 2:
+            decision_factors.append("→ COURSE (TSB > -15 et 2j+ repos)")
+            return True, f"TSB acceptable ({tsb:.1f}) après {days_since}j repos", decision_factors
+
+        # RÈGLE 7: Beaucoup de jours sans run → COURSE (même si fatigué)
+        if days_since >= 4:
+            decision_factors.append("→ COURSE (4j+ sans run, maintien fitness)")
+            return True, f"{days_since}j sans courir, maintien de la fitness", decision_factors
+
+        # RÈGLE 8: TSB négatif et peu de repos → REPOS
+        if tsb < 0 and days_since < 2:
+            decision_factors.append("→ REPOS (TSB négatif, repos insuffisant)")
+            return False, f"Encore fatigué (TSB {tsb:.1f}), besoin de repos", decision_factors
+
+        # DÉFAUT: En cas de doute, récupérer
+        decision_factors.append("→ REPOS (défaut prudent)")
+        return False, "Récupération par défaut", decision_factors
 
     def calculate_target_tss(self):
         """Calcule le TSS cible basé sur le modèle Banister."""
@@ -657,16 +704,19 @@ def main():
     # Moteur de décision
     engine = PolarizedEngine(config, analyzer, wellness, today)
 
-    # Étape 1: Jour de course?
-    should_run, reason = engine.should_run_today()
-    print(f"\n🏃 Jour de course? {reason}")
+    # Étape 1: Jour de course? (100% data-driven)
+    should_run, reason, factors = engine.should_run_today()
+    print(f"\n🏃 Analyse COURSE/REPOS:")
+    for factor in factors:
+        print(f"  • {factor}")
+    print(f"\n  → {reason}")
 
     if not should_run:
-        print("→ C'est un jour de REPOS. Pas de séance générée.")
+        print("\n🛋️  C'est un jour de REPOS. Pas de séance générée.")
         print(f"\n{'='*60}")
         return
 
-    print("→ C'est un jour de COURSE!")
+    print("\n🏃 C'est un jour de COURSE!")
 
     # Étape 2: TSS cible
     tss_data = engine.calculate_target_tss()

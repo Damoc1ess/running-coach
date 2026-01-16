@@ -42,9 +42,16 @@ Based on [Stephen Seiler's research](https://pubmed.ncbi.nlm.nih.gov/20861519/) 
 ## Decision Logic
 
 ```
-STEP 1: Running day?
-├── Ran today/yesterday → REST
-└── 2+ days since run   → RUN
+STEP 1: Running day? (100% data-driven)
+├── IF already ran today        → REST
+├── IF TSB < -25                → REST (overtraining)
+├── IF ACWR > 1.5               → REST (injury risk)
+├── IF TSB > 15 AND 3d+ rest    → RUN (detraining risk)
+├── IF TSB > 5                  → RUN (well recovered)
+├── IF TSB > -15 AND 2d+ rest   → RUN (adequate recovery)
+├── IF 4d+ without running      → RUN (maintain fitness)
+├── IF TSB < 0 AND < 2d rest    → REST (still fatigued)
+└── DEFAULT                     → REST (when in doubt)
 
 STEP 2: Calculate target TSS
 ├── Banister model (CTL/ATL/TSB)
