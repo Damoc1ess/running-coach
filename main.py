@@ -10,7 +10,7 @@ import re
 from datetime import date, timedelta, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 # ==============================================================================
 # --- CONFIGURATION PAR DÉFAUT (peut être override par config.json) ---
@@ -146,6 +146,28 @@ class IntervalsAPI:
         except Exception as e:
             print(f"ERREUR création workout: {e}")
             return None
+
+    def get_sport_settings(self, sport_type="Run"):
+        """Récupère les paramètres spécifiques à un sport (zones HR, LTHR, etc.)."""
+        url = f"{self.athlete_url}/sport-settings"
+        try:
+            response = requests.get(url, auth=self.auth, timeout=10)
+            response.raise_for_status()
+            settings = response.json()
+            # Trouver les settings pour le sport demandé
+            for s in settings:
+                if sport_type in s.get('types', []):
+                    return {
+                        'lthr': s.get('lthr'),
+                        'max_hr': s.get('max_hr'),
+                        'hr_zones': s.get('hr_zones'),
+                        'warmup_time': s.get('warmup_time'),
+                        'cooldown_time': s.get('cooldown_time')
+                    }
+            return {}
+        except Exception as e:
+            print(f"ERREUR API sport-settings: {e}")
+            return {}
 
 
 # ==============================================================================
@@ -699,11 +721,18 @@ def main():
     athlete_info = api.get_athlete_info()
     activities = api.get_activities(today - timedelta(days=60), today)
 
+    # Récupérer les paramètres HR depuis sport-settings
+    sport_settings = api.get_sport_settings("Run")
+    if sport_settings.get('lthr'):
+        athlete_info['lthr'] = sport_settings['lthr']
+    if sport_settings.get('max_hr'):
+        athlete_info['max_hr'] = sport_settings['max_hr']
+
     # Analyseur
     analyzer = DataAnalyzer(activities, athlete_info)
     run_count = len(analyzer.activities)
     print(f"✓ {run_count} runs analysés sur 60 jours")
-    print(f"✓ FC max: {analyzer.max_hr}, Seuil: {analyzer.threshold_hr}")
+    print(f"✓ FC max: {analyzer.max_hr}, LTHR: {analyzer.threshold_hr}")
     print(f"✓ Pace Z2 moyen: {analyzer.avg_easy_pace:.1f} min/km")
 
     # État actuel
