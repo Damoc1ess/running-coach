@@ -1,6 +1,7 @@
 # filename: main.py
-# Running Coach v2.0 - Polarized Data-Driven Training
+# Running Coach v2.2 - Polarized Data-Driven Training
 # 100% des décisions basées sur les données de la montre
+# v2.2: Génère les workouts pour DEMAIN (J+1) pour sync Coros
 
 import requests
 import json
@@ -9,7 +10,7 @@ import re
 from datetime import date, timedelta, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 # ==============================================================================
 # --- CONFIGURATION PAR DÉFAUT (peut être override par config.json) ---
@@ -327,6 +328,7 @@ class PolarizedEngine:
         self.analyzer = analyzer
         self.wellness = wellness
         self.today = today
+        self.tomorrow = today + timedelta(days=1)
 
         # Paramètres polarisés
         pol_config = config.get('polarized', DEFAULT_CONFIG['polarized'])
@@ -343,14 +345,15 @@ class PolarizedEngine:
         self.alb_lower = ban_config.get('alb_lower_bound', -25)
         self.tsb_recovery = ban_config.get('tsb_recovery_threshold', -25)
 
-    def should_run_today(self):
-        """Détermine si c'est un jour de course - 100% basé sur les données."""
+    def should_run_tomorrow(self):
+        """Détermine si DEMAIN est un jour de course - 100% basé sur les données."""
         tsb = self.wellness['tsb']
         ctl = self.wellness['ctl']
         atl = self.wellness['atl']
 
         last_run = self.analyzer.get_last_run_date()
-        days_since = (self.today - last_run).days if last_run else 999
+        # Pour demain: on calcule les jours depuis le dernier run jusqu'à DEMAIN
+        days_since = (self.tomorrow - last_run).days if last_run else 999
 
         # Calcul du ratio charge aiguë/chronique (ACWR simplifié)
         acwr = atl / ctl if ctl > 0 else 1.0
@@ -358,51 +361,54 @@ class PolarizedEngine:
         decision_factors = []
         decision_factors.append(f"TSB: {tsb:.1f}")
         decision_factors.append(f"ACWR: {acwr:.2f}")
-        decision_factors.append(f"Jours depuis run: {days_since}")
+        decision_factors.append(f"Jours depuis run (demain): {days_since}")
 
         # === RÈGLES 100% DATA-DRIVEN ===
 
-        # RÈGLE 1: Déjà couru aujourd'hui → REPOS (évident)
-        if days_since == 0:
-            return False, "Déjà couru aujourd'hui", decision_factors
+        # RÈGLE 1: Aura couru aujourd'hui → on vérifie si assez de repos
+        # Note: days_since == 1 signifie que le dernier run était aujourd'hui
+        if days_since == 1:
+            # Couru aujourd'hui, demain = 1 jour de repos seulement
+            decision_factors.append("→ Run aujourd'hui, évaluation repos")
+            # Continue avec les autres règles (ne bloque pas automatiquement)
 
         # RÈGLE 2: TSB très négatif → REPOS (surentraînement)
         if tsb < -25:
-            decision_factors.append("→ REPOS (TSB < -25, surentraînement)")
+            decision_factors.append("→ REPOS demain (TSB < -25, surentraînement)")
             return False, f"TSB trop bas ({tsb:.1f}), récupération nécessaire", decision_factors
 
         # RÈGLE 3: ACWR trop élevé → REPOS (risque blessure)
         if acwr > 1.5:
-            decision_factors.append("→ REPOS (ACWR > 1.5, risque blessure)")
+            decision_factors.append("→ REPOS demain (ACWR > 1.5, risque blessure)")
             return False, f"ACWR trop élevé ({acwr:.2f}), risque de blessure", decision_factors
 
         # RÈGLE 4: TSB très positif + plusieurs jours sans run → COURSE (désentraînement)
         if tsb > 15 and days_since >= 3:
-            decision_factors.append("→ COURSE (TSB > 15, risque désentraînement)")
-            return True, f"Bien reposé (TSB {tsb:.1f}) et {days_since}j sans run", decision_factors
+            decision_factors.append("→ COURSE demain (TSB > 15, risque désentraînement)")
+            return True, f"Bien reposé (TSB {tsb:.1f}) et {days_since}j sans run demain", decision_factors
 
         # RÈGLE 5: TSB positif → COURSE (récupéré)
         if tsb > 5:
-            decision_factors.append("→ COURSE (TSB > 5, bien récupéré)")
+            decision_factors.append("→ COURSE demain (TSB > 5, bien récupéré)")
             return True, f"Récupéré (TSB {tsb:.1f})", decision_factors
 
         # RÈGLE 6: TSB modérément négatif mais assez de repos → COURSE
         if tsb > -15 and days_since >= 2:
-            decision_factors.append("→ COURSE (TSB > -15 et 2j+ repos)")
-            return True, f"TSB acceptable ({tsb:.1f}) après {days_since}j repos", decision_factors
+            decision_factors.append("→ COURSE demain (TSB > -15 et 2j+ repos)")
+            return True, f"TSB acceptable ({tsb:.1f}) après {days_since}j repos demain", decision_factors
 
         # RÈGLE 7: Beaucoup de jours sans run → COURSE (même si fatigué)
         if days_since >= 4:
-            decision_factors.append("→ COURSE (4j+ sans run, maintien fitness)")
-            return True, f"{days_since}j sans courir, maintien de la fitness", decision_factors
+            decision_factors.append("→ COURSE demain (4j+ sans run, maintien fitness)")
+            return True, f"{days_since}j sans courir demain, maintien de la fitness", decision_factors
 
         # RÈGLE 8: TSB négatif et peu de repos → REPOS
         if tsb < 0 and days_since < 2:
-            decision_factors.append("→ REPOS (TSB négatif, repos insuffisant)")
+            decision_factors.append("→ REPOS demain (TSB négatif, repos insuffisant)")
             return False, f"Encore fatigué (TSB {tsb:.1f}), besoin de repos", decision_factors
 
         # DÉFAUT: En cas de doute, récupérer
-        decision_factors.append("→ REPOS (défaut prudent)")
+        decision_factors.append("→ REPOS demain (défaut prudent)")
         return False, "Récupération par défaut", decision_factors
 
     def calculate_target_tss(self):
@@ -440,7 +446,8 @@ class PolarizedEngine:
         last_hard = self.analyzer.get_last_hard_workout_date()
         tsb = self.wellness['tsb']
 
-        days_since_hard = (self.today - last_hard).days if last_hard else 999
+        # Pour demain: on calcule les jours depuis la dernière séance hard jusqu'à DEMAIN
+        days_since_hard = (self.tomorrow - last_hard).days if last_hard else 999
 
         decision_log = []
         decision_log.append(f"Distribution ({self.analysis_window}j): {distribution['easy_percent']:.0f}% easy, {distribution['hard_percent']:.0f}% hard")
@@ -667,7 +674,9 @@ def main():
     except:
         today = date.today()
 
-    print(f"📅 Date: {today.isoformat()}")
+    tomorrow = today + timedelta(days=1)
+    print(f"📅 Aujourd'hui: {today.isoformat()}")
+    print(f"📅 Planification pour: {tomorrow.isoformat()} (DEMAIN)")
 
     # Credentials
     try:
@@ -704,19 +713,19 @@ def main():
     # Moteur de décision
     engine = PolarizedEngine(config, analyzer, wellness, today)
 
-    # Étape 1: Jour de course? (100% data-driven)
-    should_run, reason, factors = engine.should_run_today()
-    print(f"\n🏃 Analyse COURSE/REPOS:")
+    # Étape 1: Jour de course DEMAIN? (100% data-driven)
+    should_run, reason, factors = engine.should_run_tomorrow()
+    print(f"\n🏃 Analyse COURSE/REPOS pour DEMAIN ({tomorrow.isoformat()}):")
     for factor in factors:
         print(f"  • {factor}")
     print(f"\n  → {reason}")
 
     if not should_run:
-        print("\n🛋️  C'est un jour de REPOS. Pas de séance générée.")
+        print(f"\n🛋️  DEMAIN ({tomorrow.isoformat()}) est un jour de REPOS. Pas de séance générée.")
         print(f"\n{'='*60}")
         return
 
-    print("\n🏃 C'est un jour de COURSE!")
+    print(f"\n🏃 DEMAIN ({tomorrow.isoformat()}) est un jour de COURSE!")
 
     # Étape 2: TSS cible
     tss_data = engine.calculate_target_tss()
@@ -737,16 +746,16 @@ def main():
     distance_km = engine.estimate_distance(duration_min, workout_type)
     print(f"⏱️  Durée: {duration_min} min | Distance estimée: {distance_km} km")
 
-    # Vérifier si workout déjà planifié
-    existing = api.get_events(today, today)
+    # Vérifier si workout déjà planifié pour DEMAIN
+    existing = api.get_events(tomorrow, tomorrow)
     for event in existing:
         if event.get('category') == 'WORKOUT' and 'Run' in str(event.get('type', '')):
-            print(f"\n⚠️  Workout déjà planifié pour aujourd'hui: {event.get('name')}")
+            print(f"\n⚠️  Workout déjà planifié pour DEMAIN ({tomorrow.isoformat()}): {event.get('name')}")
             print("→ Pas de nouvelle séance créée.")
             print(f"\n{'='*60}")
             return
 
-    # Construire le workout
+    # Construire le workout pour DEMAIN
     builder = WorkoutBuilder(config, analyzer)
     workout = builder.build(
         workout_type=workout_type,
@@ -755,12 +764,12 @@ def main():
         distance_km=distance_km,
         wellness=wellness,
         decision_log=decision_log,
-        workout_date=today
+        workout_date=tomorrow
     )
 
-    print(f"\n📝 Workout généré:")
+    print(f"\n📝 Workout généré pour DEMAIN:")
     print(f"  Nom: {workout['name']}")
-    print(f"  Date: {today.isoformat()}")
+    print(f"  Date: {tomorrow.isoformat()}")
     print(f"  TSS: {workout['load']}")
 
     # Upload
