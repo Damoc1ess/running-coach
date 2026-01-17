@@ -1,0 +1,20 @@
+# Exemple de configuration Homepage pour Running Coach
+# A ajouter dans /opt/homepage/config/services.yaml
+
+- Running:
+    - Running Coach:
+        icon: running.png
+        href: http://192.168.1.42:8501
+        description: Dashboard entrainement
+        widget:
+          type: customapi
+          url: http://running-coach:8000/api/homepage-widget
+          mappings:
+            - field: tsb
+              label: TSB
+              format: number
+            - field: acwr
+              label: ACWR
+              format: number
+            - field: next_workout
+              label: Demain

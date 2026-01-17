@@ -1,0 +1,25 @@
+services:
+  running-coach:
+    build: .
+    container_name: running-coach
+    restart: unless-stopped
+    ports:
+      - "8501:8501"  # Dashboard Streamlit
+      - "8084:8000"  # API pour Homepage
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./config.json:/app/config.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - homelab
+
+networks:
+  homelab:
+    external: true

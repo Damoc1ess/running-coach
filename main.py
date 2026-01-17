@@ -65,7 +65,16 @@ DEFAULT_CONFIG = {
     },
     "operational_settings": {
         "live_mode": True,
-        "timezone": "Europe/Paris"
+        "timezone": "Europe/Brussels"
+    },
+    "weather": {
+        "enabled": True,
+        "location": {
+            "name": "Lamorteau, Belgique",
+            "lat": 49.55,
+            "lon": 5.35
+        },
+        "workout_hour": 7  # Heure prévue du workout pour la prévision
     }
 }
 
@@ -101,6 +110,29 @@ class IntervalsAPI:
         except Exception as e:
             print(f"ERREUR API wellness: {e}")
             return None
+
+    def get_wellness_range(self, start_date: date, end_date: date):
+        """Récupère l'historique wellness sur une plage de dates."""
+        url = f"{self.athlete_url}/wellness"
+        params = {"oldest": start_date.isoformat(), "newest": end_date.isoformat()}
+        try:
+            response = requests.get(url, auth=self.auth, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            result = []
+            for item in data:
+                result.append({
+                    "date": item.get('id'),
+                    "ctl": item.get('ctl') or 0,
+                    "atl": item.get('atl') or 0,
+                    "tsb": (item.get('ctl') or 0) - (item.get('atl') or 0),
+                    "resting_hr": item.get('restingHR'),
+                    "hrv": item.get('hrv')
+                })
+            return result
+        except Exception as e:
+            print(f"ERREUR API wellness range: {e}")
+            return []
 
     def get_athlete_info(self):
         """Récupère le profil athlète."""
@@ -168,6 +200,143 @@ class IntervalsAPI:
         except Exception as e:
             print(f"ERREUR API sport-settings: {e}")
             return {}
+
+
+# ==============================================================================
+# --- API MÉTÉO ---
+# ==============================================================================
+class WeatherAPI:
+    """Client pour l'API OpenWeatherMap."""
+    BASE_URL = "https://api.openweathermap.org/data/2.5"
+
+    def __init__(self, api_key, lat, lon):
+        self.api_key = api_key
+        self.lat = lat
+        self.lon = lon
+
+    def get_forecast(self, target_date: date, target_hour: int = 7):
+        """
+        Récupère les prévisions météo pour une date et heure données.
+        Utilise l'API forecast (gratuite, 5 jours, pas de 3h).
+        """
+        if not self.api_key:
+            return None
+
+        url = f"{self.BASE_URL}/forecast"
+        params = {
+            "lat": self.lat,
+            "lon": self.lon,
+            "appid": self.api_key,
+            "units": "metric",
+            "lang": "fr"
+        }
+
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            # Chercher la prévision la plus proche de target_date à target_hour
+            target_dt = datetime.combine(target_date, time(target_hour, 0))
+            best_forecast = None
+            min_diff = float('inf')
+
+            for item in data.get('list', []):
+                forecast_dt = datetime.fromisoformat(item['dt_txt'].replace(' ', 'T'))
+                diff = abs((forecast_dt - target_dt).total_seconds())
+                if diff < min_diff:
+                    min_diff = diff
+                    best_forecast = item
+
+            if best_forecast:
+                main = best_forecast.get('main', {})
+                weather = best_forecast.get('weather', [{}])[0]
+                wind = best_forecast.get('wind', {})
+
+                return {
+                    'temp': main.get('temp'),
+                    'feels_like': main.get('feels_like'),
+                    'humidity': main.get('humidity'),
+                    'description': weather.get('description', ''),
+                    'icon': weather.get('icon', ''),
+                    'wind_speed': wind.get('speed', 0),  # m/s
+                    'forecast_time': best_forecast.get('dt_txt')
+                }
+
+            return None
+
+        except Exception as e:
+            print(f"ERREUR API météo: {e}")
+            return None
+
+
+def calculate_heat_adjustment(weather_data):
+    """
+    Calcule l'ajustement d'intensité basé sur les conditions météo.
+
+    Basé sur:
+    - ACSM Position Stand on Exertional Heat Illness
+    - Périard et al. (2015) - Performance diminue ~2% par °C au-dessus de 25°C
+    - Recommandations World Athletics pour compétitions en chaleur
+
+    Retourne un facteur multiplicateur (0.0 à 1.0) et une description.
+    """
+    if not weather_data:
+        return 1.0, None, "Météo non disponible"
+
+    temp = weather_data.get('feels_like') or weather_data.get('temp', 20)
+    humidity = weather_data.get('humidity', 50)
+    description = weather_data.get('description', '')
+
+    # Indice de chaleur simplifié (Heat Index approximatif)
+    # Plus précis que la température seule pour le stress thermique
+    if temp >= 20 and humidity > 40:
+        # Formule simplifiée du Heat Index
+        heat_index = temp + (0.05 * (humidity - 40))
+    else:
+        heat_index = temp
+
+    # Déterminer l'ajustement
+    if heat_index < 18:
+        # Conditions fraîches - optimal pour la performance
+        factor = 1.0
+        advice = "Conditions optimales"
+    elif heat_index < 22:
+        # Conditions normales
+        factor = 1.0
+        advice = "Conditions normales"
+    elif heat_index < 25:
+        # Chaleur légère - vigilance
+        factor = 0.95
+        advice = "Chaleur légère - bien s'hydrater"
+    elif heat_index < 28:
+        # Chaleur modérée - réduction recommandée
+        factor = 0.88
+        advice = "Chaleur modérée - réduire l'intensité"
+    elif heat_index < 32:
+        # Chaleur élevée - réduction significative
+        factor = 0.75
+        advice = "Chaleur élevée - privilégier endurance facile"
+    elif heat_index < 35:
+        # Chaleur dangereuse
+        factor = 0.60
+        advice = "Chaleur dangereuse - sortie matinale uniquement"
+    else:
+        # Conditions extrêmes - repos recommandé
+        factor = 0.0
+        advice = "Conditions extrêmes - repos recommandé"
+
+    weather_info = {
+        'temp': temp,
+        'feels_like': weather_data.get('feels_like'),
+        'humidity': humidity,
+        'heat_index': round(heat_index, 1),
+        'description': description,
+        'adjustment_factor': factor,
+        'advice': advice
+    }
+
+    return factor, weather_info, advice
 
 
 # ==============================================================================
@@ -585,7 +754,7 @@ class WorkoutBuilder:
         self.templates = config.get('workout_templates', DEFAULT_CONFIG['workout_templates'])
 
     def build(self, workout_type, target_tss, duration_min, distance_km,
-              wellness, decision_log, workout_date):
+              wellness, decision_log, workout_date, weather_info=None):
         """Construit le workout complet."""
 
         template = self.templates.get(workout_type, self.templates.get('easy'))
@@ -630,24 +799,38 @@ class WorkoutBuilder:
         for z, data in hr_zones.items():
             zones_text += f"  {z}: {data['min']}-{data['max']} bpm\n"
 
+        # Section météo
+        weather_text = ""
+        if weather_info:
+            weather_text = f"""
+Meteo prevue:
+* {weather_info.get('description', '').capitalize()}
+* Temperature: {weather_info.get('temp', 0):.1f} C (ressenti: {weather_info.get('feels_like', weather_info.get('temp', 0)):.1f} C)
+* Humidite: {weather_info.get('humidity', 0)}%
+* Indice chaleur: {weather_info.get('heat_index', 0)} C
+* Conseil: {weather_info.get('advice', '')}
+"""
+            if weather_info.get('adjustment_factor', 1.0) < 1.0:
+                weather_text += f"* TSS reduit de {(1 - weather_info['adjustment_factor']) * 100:.0f}% (chaleur)\n"
+
         # Rationale
         rationale = f"""
 ---
-📊 Décisions data-driven:
-{chr(10).join('• ' + log for log in decision_log)}
+Decisions data-driven:
+{chr(10).join('* ' + log for log in decision_log)}
 
-📈 État actuel:
-• CTL (Fitness): {wellness['ctl']:.1f}
-• ATL (Fatigue): {wellness['atl']:.1f}
-• TSB (Forme): {wellness['tsb']:.1f}
-
-🎯 Objectifs:
-• TSS cible: {target_tss}
-• Durée: {duration_min} min
-• Distance estimée: {distance_km} km
+Etat actuel:
+* CTL (Fitness): {wellness['ctl']:.1f}
+* ATL (Fatigue): {wellness['atl']:.1f}
+* TSB (Forme): {wellness['tsb']:.1f}
+{weather_text}
+Objectifs:
+* TSS cible: {target_tss}
+* Duree: {duration_min} min
+* Distance estimee: {distance_km} km
 {zones_text}
 ---
-🤖 Running Coach v{VERSION} - Polarized Data-Driven
+Running Coach v{VERSION} - Polarized Data-Driven
 """
 
         description = structure + rationale
@@ -662,6 +845,229 @@ class WorkoutBuilder:
             "description": description,
             "load": target_tss
         }
+
+
+# ==============================================================================
+# --- FONCTIONS D'EXPORT POUR DASHBOARD ---
+# ==============================================================================
+def _get_initialized_components():
+    """Initialise les composants nécessaires pour les fonctions d'export."""
+    # Charger config
+    config = DEFAULT_CONFIG.copy()
+    try:
+        with open("config.json") as f:
+            user_config = json.load(f)
+            for key in user_config:
+                if isinstance(user_config[key], dict) and key in config:
+                    config[key].update(user_config[key])
+                else:
+                    config[key] = user_config[key]
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Timezone
+    try:
+        tz_str = config.get('operational_settings', {}).get('timezone', 'Europe/Paris')
+        tz = ZoneInfo(tz_str)
+        today = datetime.now(tz).date()
+    except:
+        today = date.today()
+
+    # Credentials
+    try:
+        api_key = os.environ['API_KEY']
+        athlete_id = os.environ['ATHLETE_ID']
+    except KeyError:
+        return None, None, None, None, None
+
+    weather_api_key = os.environ.get('OPENWEATHER_API_KEY', '')
+
+    # API
+    api = IntervalsAPI(athlete_id, api_key)
+
+    return config, today, api, weather_api_key, None
+
+
+def get_current_wellness() -> dict:
+    """Retourne l'état de forme actuel (CTL, ATL, TSB, ACWR)."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return {"error": "API non configurée"}
+
+    wellness = api.get_wellness(today)
+    if not wellness:
+        return {"error": "Données wellness non disponibles"}
+
+    # Calculer ACWR
+    ctl = wellness['ctl']
+    atl = wellness['atl']
+    acwr = atl / ctl if ctl > 0 else 1.0
+
+    return {
+        "ctl": wellness['ctl'],
+        "atl": wellness['atl'],
+        "tsb": wellness['tsb'],
+        "acwr": round(acwr, 2),
+        "resting_hr": wellness.get('resting_hr'),
+        "hrv": wellness.get('hrv'),
+        "date": today.isoformat()
+    }
+
+
+def get_distribution(days: int = 21) -> dict:
+    """Retourne la distribution polarisée (easy vs hard) sur N jours."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return {"error": "API non configurée"}
+
+    athlete_info = api.get_athlete_info()
+    activities = api.get_activities(today - timedelta(days=60), today)
+
+    analyzer = DataAnalyzer(activities, athlete_info)
+    distribution = analyzer.get_training_distribution(days)
+
+    return {
+        "total_runs": distribution['total_runs'],
+        "easy_count": distribution['easy_count'],
+        "hard_count": distribution['hard_count'],
+        "easy_percent": round(distribution['easy_percent'], 1),
+        "hard_percent": round(distribution['hard_percent'], 1),
+        "target_easy": 80,
+        "target_hard": 20,
+        "days_analyzed": days
+    }
+
+
+def get_next_workout_info() -> dict:
+    """Retourne les informations sur la prochaine séance planifiée."""
+    config, today, api, weather_api_key, _ = _get_initialized_components()
+    if not api:
+        return {"error": "API non configurée"}
+
+    tomorrow = today + timedelta(days=1)
+
+    # Données
+    wellness = api.get_wellness(today)
+    if not wellness:
+        return {"error": "Données wellness non disponibles"}
+
+    athlete_info = api.get_athlete_info()
+    activities = api.get_activities(today - timedelta(days=60), today)
+
+    # Sport settings
+    sport_settings = api.get_sport_settings("Run")
+    if sport_settings.get('lthr'):
+        athlete_info['lthr'] = sport_settings['lthr']
+    if sport_settings.get('max_hr'):
+        athlete_info['max_hr'] = sport_settings['max_hr']
+
+    analyzer = DataAnalyzer(activities, athlete_info)
+    engine = PolarizedEngine(config, analyzer, wellness, today)
+
+    # Décision course/repos
+    should_run, reason, factors = engine.should_run_tomorrow()
+
+    if not should_run:
+        return {
+            "date": tomorrow.isoformat(),
+            "name": "Repos",
+            "type": "rest",
+            "duration": 0,
+            "distance": 0,
+            "tss": 0,
+            "reason": reason,
+            "decision_factors": factors
+        }
+
+    # Calcul du workout
+    tss_data = engine.calculate_target_tss()
+    workout_category, decision_log = engine.select_workout_type()
+    workout_type = engine.choose_specific_workout(workout_category, tss_data['target_tss'])
+    duration_min = engine.calculate_workout_duration(workout_type, tss_data['target_tss'])
+    distance_km = engine.estimate_distance(duration_min, workout_type)
+
+    templates = config.get('workout_templates', DEFAULT_CONFIG['workout_templates'])
+    template = templates.get(workout_type, templates.get('easy'))
+
+    # Météo
+    weather_info = None
+    weather_config = config.get('weather', DEFAULT_CONFIG['weather'])
+    if weather_config.get('enabled', True) and weather_api_key:
+        location = weather_config.get('location', DEFAULT_CONFIG['weather']['location'])
+        workout_hour = weather_config.get('workout_hour', 7)
+        weather_api = WeatherAPI(
+            api_key=weather_api_key,
+            lat=location['lat'],
+            lon=location['lon']
+        )
+        weather_data = weather_api.get_forecast(tomorrow, workout_hour)
+        if weather_data:
+            _, weather_info, _ = calculate_heat_adjustment(weather_data)
+
+    return {
+        "date": tomorrow.isoformat(),
+        "name": template['name'],
+        "type": workout_type,
+        "category": workout_category,
+        "duration": duration_min,
+        "distance": distance_km,
+        "tss": tss_data['target_tss'],
+        "reason": reason,
+        "decision_factors": factors,
+        "decision_log": decision_log,
+        "weather": weather_info
+    }
+
+
+def get_activity_history(days: int = 60) -> list:
+    """Retourne l'historique des activités sur N jours."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return []
+
+    activities = api.get_activities(today - timedelta(days=days), today)
+
+    result = []
+    for a in activities:
+        if a.get('type') != 'Run':
+            continue
+        result.append({
+            "date": a.get('start_date_local', '')[:10],
+            "name": a.get('name', 'Run'),
+            "distance_km": round((a.get('distance') or 0) / 1000, 2),
+            "duration_min": round((a.get('moving_time') or 0) / 60, 1),
+            "tss": a.get('icu_training_load') or 0,
+            "avg_hr": a.get('average_heartrate'),
+            "max_hr": a.get('max_heartrate'),
+            "intensity": a.get('icu_intensity')
+        })
+
+    return sorted(result, key=lambda x: x['date'], reverse=True)
+
+
+def get_wellness_history(days: int = 30) -> list:
+    """Retourne l'historique wellness (CTL, ATL, TSB) sur N jours."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return []
+
+    start_date = today - timedelta(days=days)
+    wellness_data = api.get_wellness_range(start_date, today)
+
+    return wellness_data
+
+
+def get_weekly_tss(weeks: int = 8) -> list:
+    """Retourne le TSS par semaine sur N semaines."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return []
+
+    athlete_info = api.get_athlete_info()
+    activities = api.get_activities(today - timedelta(days=weeks * 7 + 7), today)
+
+    analyzer = DataAnalyzer(activities, athlete_info)
+    return analyzer.get_weekly_stats(weeks)
 
 
 # ==============================================================================
@@ -684,9 +1090,9 @@ def main():
                 else:
                     config[key] = user_config[key]
     except FileNotFoundError:
-        print("ℹ️  Pas de config.json, utilisation des défauts")
+        print("Info: Pas de config.json, utilisation des defauts")
     except json.JSONDecodeError as e:
-        print(f"⚠️  Erreur config.json: {e}, utilisation des défauts")
+        print(f"Attention: Erreur config.json: {e}, utilisation des defauts")
 
     # Timezone
     try:
@@ -697,25 +1103,28 @@ def main():
         today = date.today()
 
     tomorrow = today + timedelta(days=1)
-    print(f"📅 Aujourd'hui: {today.isoformat()}")
-    print(f"📅 Planification pour: {tomorrow.isoformat()} (DEMAIN)")
+    print(f"Date: Aujourd'hui: {today.isoformat()}")
+    print(f"Date: Planification pour: {tomorrow.isoformat()} (DEMAIN)")
 
     # Credentials
     try:
         api_key = os.environ['API_KEY']
         athlete_id = os.environ['ATHLETE_ID']
     except KeyError as e:
-        print(f"❌ Variable manquante: {e}")
+        print(f"Erreur: Variable manquante: {e}")
         return
+
+    # Clé API météo (optionnelle)
+    weather_api_key = os.environ.get('OPENWEATHER_API_KEY', '')
 
     # API
     api = IntervalsAPI(athlete_id, api_key)
 
     # Données
-    print("\n📡 Récupération des données...")
+    print("\nRecuperation des donnees...")
     wellness = api.get_wellness(today)
     if not wellness:
-        print("❌ Impossible de récupérer wellness")
+        print("Erreur: Impossible de recuperer wellness")
         return
 
     athlete_info = api.get_athlete_info()
@@ -731,12 +1140,12 @@ def main():
     # Analyseur
     analyzer = DataAnalyzer(activities, athlete_info)
     run_count = len(analyzer.activities)
-    print(f"✓ {run_count} runs analysés sur 60 jours")
-    print(f"✓ FC max: {analyzer.max_hr}, LTHR: {analyzer.threshold_hr}")
-    print(f"✓ Pace Z2 moyen: {analyzer.avg_easy_pace:.1f} min/km")
+    print(f"OK: {run_count} runs analyses sur 60 jours")
+    print(f"OK: FC max: {analyzer.max_hr}, LTHR: {analyzer.threshold_hr}")
+    print(f"OK: Pace Z2 moyen: {analyzer.avg_easy_pace:.1f} min/km")
 
     # État actuel
-    print(f"\n📊 État actuel:")
+    print(f"\nEtat actuel:")
     print(f"  CTL: {wellness['ctl']:.1f} | ATL: {wellness['atl']:.1f} | TSB: {wellness['tsb']:.1f}")
 
     # Moteur de décision
@@ -744,43 +1153,93 @@ def main():
 
     # Étape 1: Jour de course DEMAIN? (100% data-driven)
     should_run, reason, factors = engine.should_run_tomorrow()
-    print(f"\n🏃 Analyse COURSE/REPOS pour DEMAIN ({tomorrow.isoformat()}):")
+    print(f"\nAnalyse COURSE/REPOS pour DEMAIN ({tomorrow.isoformat()}):")
     for factor in factors:
-        print(f"  • {factor}")
-    print(f"\n  → {reason}")
+        print(f"  * {factor}")
+    print(f"\n  -> {reason}")
 
     if not should_run:
-        print(f"\n🛋️  DEMAIN ({tomorrow.isoformat()}) est un jour de REPOS. Pas de séance générée.")
+        print(f"\nDEMAIN ({tomorrow.isoformat()}) est un jour de REPOS. Pas de seance generee.")
         print(f"\n{'='*60}")
         return
 
-    print(f"\n🏃 DEMAIN ({tomorrow.isoformat()}) est un jour de COURSE!")
+    print(f"\nDEMAIN ({tomorrow.isoformat()}) est un jour de COURSE!")
 
     # Étape 2: TSS cible
     tss_data = engine.calculate_target_tss()
-    print(f"\n🎯 TSS cible: {tss_data['target_tss']} ({tss_data['reason']})")
+    original_tss = tss_data['target_tss']
+    print(f"\nTSS cible: {original_tss} ({tss_data['reason']})")
+
+    # Étape 2b: Ajustement météo
+    weather_config = config.get('weather', DEFAULT_CONFIG['weather'])
+    weather_data = None
+    weather_info = None
+    weather_adjustment = 1.0
+
+    if weather_config.get('enabled', True) and weather_api_key:
+        location = weather_config.get('location', DEFAULT_CONFIG['weather']['location'])
+        workout_hour = weather_config.get('workout_hour', 7)
+
+        weather_api = WeatherAPI(
+            api_key=weather_api_key,
+            lat=location['lat'],
+            lon=location['lon']
+        )
+
+        print(f"\nRecuperation meteo pour {location.get('name', 'votre position')}...")
+        weather_data = weather_api.get_forecast(tomorrow, workout_hour)
+
+        if weather_data:
+            weather_adjustment, weather_info, weather_advice = calculate_heat_adjustment(weather_data)
+
+            print(f"  Prevision: {weather_data['description']}")
+            print(f"  Temperature: {weather_data['temp']:.1f} C (ressenti: {weather_data.get('feels_like', weather_data['temp']):.1f} C)")
+            print(f"  Humidite: {weather_data['humidity']}%")
+
+            if weather_info:
+                print(f"  Indice chaleur: {weather_info['heat_index']} C")
+
+            if weather_adjustment < 1.0:
+                adjusted_tss = int(original_tss * weather_adjustment)
+                print(f"  Attention: {weather_advice}")
+                print(f"  -> TSS ajuste: {original_tss} x {weather_adjustment:.0%} = {adjusted_tss}")
+                tss_data['target_tss'] = adjusted_tss
+                tss_data['weather_adjusted'] = True
+                tss_data['original_tss'] = original_tss
+            else:
+                print(f"  OK: {weather_advice}")
+                tss_data['weather_adjusted'] = False
+
+            if weather_adjustment == 0.0:
+                print(f"\nConditions meteo extremes - REPOS recommande demain.")
+                print(f"\n{'='*60}")
+                return
+        else:
+            print("  Attention: Previsions non disponibles")
+    elif not weather_api_key and weather_config.get('enabled', True):
+        print("\nMeteo: OPENWEATHER_API_KEY non configuree (ajustement desactive)")
 
     # Étape 3: Type de séance
     workout_category, decision_log = engine.select_workout_type()
-    print(f"\n🧠 Décision:")
+    print(f"\nDecision:")
     for log in decision_log:
         print(f"  {log}")
 
     # Étape 4: Workout spécifique
     workout_type = engine.choose_specific_workout(workout_category, tss_data['target_tss'])
-    print(f"\n📋 Workout sélectionné: {workout_type}")
+    print(f"\nWorkout selectionne: {workout_type}")
 
     # Étape 5: Durée et distance
     duration_min = engine.calculate_workout_duration(workout_type, tss_data['target_tss'])
     distance_km = engine.estimate_distance(duration_min, workout_type)
-    print(f"⏱️  Durée: {duration_min} min | Distance estimée: {distance_km} km")
+    print(f"Duree: {duration_min} min | Distance estimee: {distance_km} km")
 
     # Vérifier si workout déjà planifié pour DEMAIN
     existing = api.get_events(tomorrow, tomorrow)
     for event in existing:
         if event.get('category') == 'WORKOUT' and 'Run' in str(event.get('type', '')):
-            print(f"\n⚠️  Workout déjà planifié pour DEMAIN ({tomorrow.isoformat()}): {event.get('name')}")
-            print("→ Pas de nouvelle séance créée.")
+            print(f"\nAttention: Workout deja planifie pour DEMAIN ({tomorrow.isoformat()}): {event.get('name')}")
+            print("-> Pas de nouvelle seance creee.")
             print(f"\n{'='*60}")
             return
 
@@ -793,29 +1252,30 @@ def main():
         distance_km=distance_km,
         wellness=wellness,
         decision_log=decision_log,
-        workout_date=tomorrow
+        workout_date=tomorrow,
+        weather_info=weather_info
     )
 
-    print(f"\n📝 Workout généré pour DEMAIN:")
+    print(f"\nWorkout genere pour DEMAIN:")
     print(f"  Nom: {workout['name']}")
     print(f"  Date: {tomorrow.isoformat()}")
     print(f"  TSS: {workout['load']}")
 
     # Upload
     if config.get('operational_settings', {}).get('live_mode', False):
-        print("\n📤 Upload vers Intervals.icu...")
+        print("\nUpload vers Intervals.icu...")
         result = api.create_workout(workout)
         if result:
-            print("✅ Workout uploadé avec succès!")
+            print("OK: Workout uploade avec succes!")
         else:
-            print("❌ Échec de l'upload")
+            print("Erreur: Echec de l'upload")
     else:
-        print("\n🔒 Mode DRY RUN - Workout non uploadé")
+        print("\nMode DRY RUN - Workout non uploade")
         print("\n--- Description ---")
         print(workout['description'])
 
     print(f"\n{'='*60}")
-    print("  Script terminé")
+    print("  Script termine")
     print(f"{'='*60}\n")
 
 
