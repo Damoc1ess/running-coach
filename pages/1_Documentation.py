@@ -1019,53 +1019,153 @@ elif section == "API Intervals.icu":
     AUTH = ("API_KEY", votre_api_key)
     ATHLETE_URL = f"{BASE_URL}/api/v1/athlete/{athlete_id}"
     ```
-
-    ---
-
-    ## Endpoints utilises
     """)
 
-    # Tableau des endpoints
+    st.markdown("---")
+
+    # ========================================
+    # RECAPITULATIF DES DONNEES UTILISEES
+    # ========================================
+    st.subheader("Recapitulatif : Donnees utilisees par Running Coach")
+
+    st.markdown("""
+    L'API Intervals.icu expose **37+ champs** par endpoint, mais Running Coach n'utilise que
+    les donnees necessaires a l'algorithme. Voici la liste exhaustive :
+    """)
+
+    # Tableau récapitulatif complet
+    recap_data = {
+        "Source": [
+            "Montre Coros",
+            "Montre Coros",
+            "Montre Coros",
+            "Montre Coros",
+            "Calcule par Intervals",
+            "Calcule par Intervals",
+            "Calcule par Intervals",
+            "Calcule par Intervals",
+            "Calcule par Intervals",
+            "Config Intervals",
+            "Config Intervals",
+            "Activite",
+            "Activite",
+            "Activite",
+            "Activite",
+            "Activite",
+            "Activite"
+        ],
+        "Champ API": [
+            "restingHR",
+            "hrv",
+            "sleepSecs",
+            "average_heartrate",
+            "ctl",
+            "atl",
+            "rampRate",
+            "icu_training_load",
+            "pace",
+            "lthr",
+            "max_hr",
+            "type",
+            "moving_time",
+            "distance",
+            "start_date_local",
+            "name",
+            "category"
+        ],
+        "Variable interne": [
+            "resting_hr",
+            "hrv",
+            "sleep_hours",
+            "average_heartrate",
+            "ctl",
+            "atl",
+            "ramp_rate",
+            "tss / load",
+            "pace",
+            "lthr",
+            "max_hr",
+            "type",
+            "moving_time",
+            "distance",
+            "date",
+            "name",
+            "category"
+        ],
+        "Utilisation": [
+            "Readiness score (elevation = fatigue)",
+            "Readiness score (si disponible)",
+            "Readiness score (moyenne 3j)",
+            "Calcul IF (Intensity Factor)",
+            "Fitness (modele Banister 42j)",
+            "Fatigue (modele Banister 7j)",
+            "Alerte progression trop rapide",
+            "Distribution EASY/HARD",
+            "Estimation distance workout",
+            "Calcul zones HR + IF",
+            "Plafond Zone 5",
+            "Filtrer les courses (Run)",
+            "Analyse historique",
+            "Analyse historique",
+            "Workout d'aujourd'hui/demain",
+            "Affichage dashboard",
+            "Filtrer WORKOUT vs autres"
+        ]
+    }
+    st.dataframe(recap_data, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ========================================
+    # ENDPOINTS DETAILLES
+    # ========================================
+    st.subheader("Endpoints utilises")
+
     endpoints_data = {
         "Endpoint": [
-            "GET /athlete/{id}/wellness/{date}",
-            "GET /athlete/{id}/wellness",
-            "GET /athlete/{id}",
-            "GET /athlete/{id}/activities",
-            "GET /athlete/{id}/events",
-            "POST /athlete/{id}/events",
-            "GET /athlete/{id}/sport-settings"
+            "GET /wellness/{date}",
+            "GET /wellness",
+            "GET /activities",
+            "GET /events",
+            "POST /events",
+            "GET /sport-settings"
         ],
-        "Methode": ["get_wellness()", "get_wellness_range()", "get_athlete_info()",
-                    "get_activities()", "get_events()", "create_workout()", "get_sport_settings()"],
-        "Usage": [
-            "CTL, ATL, TSB du jour",
-            "Historique wellness (graphiques)",
-            "Profil athlete",
-            "Historique des courses",
-            "Seances planifiees",
-            "Upload workout genere",
-            "LTHR, zones HR"
+        "Methode Python": [
+            "get_wellness()",
+            "get_wellness_range()",
+            "get_activities()",
+            "get_events()",
+            "create_workout()",
+            "get_sport_settings()"
+        ],
+        "Donnees recuperees": [
+            "ctl, atl, restingHR, hrv",
+            "ctl, atl, restingHR, hrv, sleepSecs, rampRate",
+            "type, icu_training_load, moving_time, distance, average_heartrate, pace",
+            "category, name, start_date_local, load, description",
+            "(upload workout genere)",
+            "lthr, max_hr, hr_zones"
         ]
     }
     st.table(endpoints_data)
 
     st.markdown("---")
 
-    # GET wellness/{date}
-    st.subheader("1. GET /wellness/{date}")
-    st.markdown("**But** : Recuperer les metriques de forme pour une date specifique")
+    # ========================================
+    # 1. WELLNESS
+    # ========================================
+    st.subheader("1. Wellness - Donnees quotidiennes")
+
+    st.markdown("""
+    **Source des donnees** : Synchronisees automatiquement depuis votre montre Coros vers Intervals.icu.
+
+    **Endpoint single** : `GET /api/v1/athlete/{id}/wellness/{date}`
+    **Endpoint range** : `GET /api/v1/athlete/{id}/wellness?oldest=...&newest=...`
+    """)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Requete**")
-        st.code("""
-GET /api/v1/athlete/{id}/wellness/2026-01-21
-Authorization: Basic (API_KEY, key)
-        """, language="http")
-
-    with col2:
-        st.markdown("**Reponse (extrait)**")
+        st.markdown("**Reponse API (champs utilises uniquement)**")
         st.code("""
 {
   "id": "2026-01-21",
@@ -1074,398 +1174,268 @@ Authorization: Basic (API_KEY, key)
   "restingHR": 48,
   "hrv": 65,
   "sleepSecs": 27000,
-  "weight": 70.5
+  "rampRate": 1.2
 }
         """, language="json")
 
-    st.markdown("**Champs utilises par Running Coach** :")
-    wellness_fields = {
-        "Champ API": ["ctl", "atl", "(calcule)", "restingHR", "hrv"],
-        "Variable interne": ["ctl", "atl", "tsb", "resting_hr", "hrv"],
-        "Utilisation": [
-            "Niveau de fitness (42j)",
-            "Niveau de fatigue (7j)",
-            "Forme du jour (CTL - ATL)",
-            "Recuperation cardiaque",
-            "Variabilite cardiaque"
-        ],
-        "Impact decision": [
-            "Calcul TSS cible",
-            "Calcul TSS cible, ACWR",
-            "Decision RUN/REPOS",
-            "Readiness score",
-            "Readiness score (si dispo)"
-        ]
-    }
-    st.table(wellness_fields)
-
-    st.markdown("---")
-
-    # GET wellness (range)
-    st.subheader("2. GET /wellness (plage de dates)")
-    st.markdown("**But** : Recuperer l'historique wellness pour les graphiques et analyses")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Requete**")
-        st.code("""
-GET /api/v1/athlete/{id}/wellness
-  ?oldest=2025-12-01
-  &newest=2026-01-21
-Authorization: Basic (API_KEY, key)
-        """, language="http")
-
     with col2:
-        st.markdown("**Reponse (extrait)**")
-        st.code("""
-[
-  {
-    "id": "2026-01-21",
-    "ctl": 45.2,
-    "atl": 52.1,
-    "restingHR": 48,
-    "sleepSecs": 27000,
-    "rampRate": 1.2
-  },
-  {
-    "id": "2026-01-20",
-    ...
-  }
-]
-        """, language="json")
-
-    st.markdown("**Champs supplementaires utilises** :")
-    st.markdown("""
-    | Champ API | Utilisation |
-    |-----------|-------------|
-    | `sleepSecs` | Converti en heures, moyenne 3j pour readiness |
-    | `rampRate` | Vitesse de progression CTL (alerte si > 2.0) |
-    """)
-
-    st.markdown("---")
-
-    # GET athlete
-    st.subheader("3. GET /athlete/{id}")
-    st.markdown("**But** : Recuperer le profil athlete (zones par defaut, infos generales)")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Requete**")
-        st.code("""
-GET /api/v1/athlete/{id}
-Authorization: Basic (API_KEY, key)
-        """, language="http")
-
-    with col2:
-        st.markdown("**Reponse (extrait)**")
+        st.markdown("**Transformation interne**")
         st.code("""
 {
-  "id": "i12345",
-  "name": "Athlete Name",
-  "email": "...",
-  "lthr": 167,
-  "max_hr": 185,
-  "weight": 70.5,
-  "birthday": "1990-01-01"
+  "date": "2026-01-21",
+  "ctl": 45.2,
+  "atl": 52.1,
+  "tsb": -6.9,  # calcule: ctl - atl
+  "resting_hr": 48,
+  "hrv": 65,
+  "sleep_hours": 7.5,  # sleepSecs / 3600
+  "ramp_rate": 1.2
+}
+        """, language="python")
+
+    st.markdown("**Detail des champs utilises** :")
+
+    wellness_detail = {
+        "Champ API": ["ctl", "atl", "restingHR", "hrv", "sleepSecs", "rampRate"],
+        "Type": ["float", "float", "int", "int", "int", "float"],
+        "Source": [
+            "Calcule par Intervals (42j)",
+            "Calcule par Intervals (7j)",
+            "Montre Coros (nuit)",
+            "Montre Coros (nuit)",
+            "Montre Coros (tracking sommeil)",
+            "Calcule par Intervals"
+        ],
+        "Utilisation dans l'algorithme": [
+            "TSS cible (Banister), ACWR",
+            "TSS cible (Banister), ACWR",
+            "Readiness: elevation vs baseline = fatigue",
+            "Readiness: indicateur stress/recuperation",
+            "Readiness: moyenne 3j, <6h = malus 25%, >8.5h = bonus 5%",
+            "Alerte si > 2.0 (progression trop rapide)"
+        ]
+    }
+    st.table(wellness_detail)
+
+    st.info("""
+    **Sommeil** : Les donnees viennent directement du capteur de votre Coros.
+    `sleepSecs` = duree totale trackee (pas une estimation). Converti en heures : `sleep_hours = sleepSecs / 3600`
+    """)
+
+    st.markdown("---")
+
+    # ========================================
+    # 2. ACTIVITIES
+    # ========================================
+    st.subheader("2. Activities - Historique des seances")
+
+    st.markdown("""
+    **Endpoint** : `GET /api/v1/athlete/{id}/activities?oldest=...&newest=...`
+
+    Utilise pour analyser la distribution EASY/HARD sur 21 jours et calculer l'allure moyenne Z2.
+    """)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Reponse API (champs utilises)**")
+        st.code("""
+{
+  "id": "i123456789",
+  "type": "Run",
+  "start_date_local": "2026-01-20T07:30:00",
+  "icu_training_load": 52,
+  "moving_time": 2700,
+  "distance": 8500,
+  "average_heartrate": 142,
+  "pace": 318
 }
         """, language="json")
 
-    st.info("""
-    **Note** : Le LTHR du profil athlete est un fallback.
-    La source preferee est `sport-settings` (plus precis par sport).
-    """)
-
-    st.markdown("---")
-
-    # GET activities
-    st.subheader("4. GET /activities")
-    st.markdown("**But** : Recuperer l'historique des activites pour l'analyse de distribution")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Requete**")
-        st.code("""
-GET /api/v1/athlete/{id}/activities
-  ?oldest=2025-12-01
-  &newest=2026-01-21
-Authorization: Basic (API_KEY, key)
-        """, language="http")
-
     with col2:
-        st.markdown("**Reponse (extrait)**")
+        st.markdown("**Utilisation**")
         st.code("""
-[
-  {
-    "id": "i123456789",
-    "start_date_local": "2026-01-20T07:30:00",
-    "type": "Run",
-    "icu_training_load": 52,
-    "moving_time": 2700,
-    "distance": 8500,
-    "average_heartrate": 142,
-    "pace": 318
-  }
-]
-        """, language="json")
+# Filtrage des courses
+runs = [a for a in activities
+        if a.get('type') == 'Run']
 
-    st.markdown("**Champs utilises** :")
-    activities_fields = {
+# Distribution 21 jours
+for run in runs:
+    tss = run['icu_training_load']
+    if is_hard_workout(tss):
+        hard_count += 1
+    else:
+        easy_count += 1
+
+# Allure moyenne Z2
+pace_z2 = mean([r['pace'] for r in runs])
+        """, language="python")
+
+    activities_detail = {
         "Champ API": ["type", "icu_training_load", "moving_time", "distance", "average_heartrate", "pace"],
+        "Type": ["string", "int", "int (sec)", "int (m)", "int (bpm)", "float (sec/km)"],
         "Utilisation": [
-            "Filtrer les courses (Run)",
-            "TSS de la seance",
-            "Duree en secondes",
-            "Distance en metres",
-            "FC moyenne (calcul IF)",
-            "Allure (sec/km) pour estimations"
+            "Filtrer uniquement les courses (Run)",
+            "TSS de la seance → classification EASY/HARD",
+            "Duree pour analyses historiques",
+            "Distance pour analyses historiques",
+            "Calcul IF = avg_hr / LTHR",
+            "Estimation distance des workouts generes"
         ]
     }
-    st.table(activities_fields)
-
-    st.markdown("""
-    **Analyses effectuees** :
-    - Distribution EASY/HARD sur 21 jours
-    - Jours depuis derniere seance difficile
-    - Allure moyenne Z2 (pour estimer distances)
-    - Frequence d'entrainement
-    """)
+    st.table(activities_detail)
 
     st.markdown("---")
 
-    # GET events
-    st.subheader("5. GET /events")
-    st.markdown("**But** : Recuperer les seances planifiees (workouts futurs)")
+    # ========================================
+    # 3. EVENTS
+    # ========================================
+    st.subheader("3. Events - Seances planifiees")
+
+    st.markdown("""
+    **Endpoint GET** : `GET /api/v1/athlete/{id}/events?oldest=...&newest=...`
+    **Endpoint POST** : `POST /api/v1/athlete/{id}/events`
+
+    Utilise pour verifier les workouts existants et uploader les seances generees.
+    """)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Requete**")
+        st.markdown("**GET - Recuperer workout existant**")
         st.code("""
-GET /api/v1/athlete/{id}/events
-  ?oldest=2026-01-21
-  &newest=2026-01-22
-Authorization: Basic (API_KEY, key)
-        """, language="http")
-
-    with col2:
-        st.markdown("**Reponse (extrait)**")
-        st.code("""
-[
-  {
-    "id": 12345,
-    "start_date_local": "2026-01-22",
-    "category": "WORKOUT",
-    "type": "Run",
-    "name": "45 TSS - Endurance Facile",
-    "load": 45,
-    "description": "5min Z1..."
-  }
-]
+{
+  "id": 12345,
+  "category": "WORKOUT",
+  "start_date_local": "2026-01-22",
+  "type": "Run",
+  "name": "45 TSS - Endurance Facile",
+  "load": 45,
+  "description": "5min Z1..."
+}
         """, language="json")
 
-    st.markdown("""
-    **Utilisation** :
-    - Verifier si une seance existe deja pour demain
-    - Recuperer le workout d'aujourd'hui (pour affichage dashboard)
-    - Eviter les doublons lors de l'upload
-    """)
-
-    st.markdown("---")
-
-    # POST events
-    st.subheader("6. POST /events (Upload workout)")
-    st.markdown("**But** : Creer une seance planifiee sur le calendrier Intervals.icu")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Requete**")
+    with col2:
+        st.markdown("**POST - Upload workout genere**")
         st.code("""
-POST /api/v1/athlete/{id}/events
-Authorization: Basic (API_KEY, key)
-Content-Type: application/json
-
 {
   "category": "WORKOUT",
   "start_date_local": "2026-01-22",
   "type": "Run",
   "name": "45 TSS - Endurance Facile",
-  "description": "Seance generee...\\n5min Z1...",
+  "description": "Seance generee...",
   "load": 45,
   "moving_time": 2700
 }
-        """, language="http")
-
-    with col2:
-        st.markdown("**Reponse**")
-        st.code("""
-{
-  "id": 12345,
-  "start_date_local": "2026-01-22",
-  "category": "WORKOUT",
-  ...
-}
         """, language="json")
 
-    st.markdown("**Champs envoyes** :")
-    upload_fields = {
-        "Champ": ["category", "start_date_local", "type", "name", "description", "load", "moving_time"],
-        "Valeur": [
-            "WORKOUT (constante)",
-            "Date J+1 (demain)",
-            "Run (constante)",
-            "XX TSS - Type Seance",
-            "Details structures + zones",
-            "TSS cible",
-            "Duree en secondes"
-        ]
+    events_detail = {
+        "Champ": ["category", "start_date_local", "type", "name", "load", "description", "moving_time"],
+        "GET": ["Filtrer WORKOUT", "Date du workout", "Filtrer Run", "Affichage", "TSS", "Details", "-"],
+        "POST": ["WORKOUT (fixe)", "Date J+1", "Run (fixe)", "XX TSS - Type", "TSS cible", "Structure zones", "Duree sec"]
     }
-    st.table(upload_fields)
+    st.table(events_detail)
 
     st.success("""
-    **Sync automatique** : Une fois uploade sur Intervals.icu, le workout est automatiquement
-    synchronise vers votre montre Coros (si connectee dans les settings Intervals).
+    **Sync automatique** : Apres POST, Intervals.icu synchronise automatiquement
+    le workout vers votre montre Coros (si connectee dans Settings → Connections → Coros).
     """)
 
     st.markdown("---")
 
-    # GET sport-settings
-    st.subheader("7. GET /sport-settings")
-    st.markdown("**But** : Recuperer les parametres specifiques a la course (LTHR, zones)")
+    # ========================================
+    # 4. SPORT SETTINGS
+    # ========================================
+    st.subheader("4. Sport Settings - Configuration zones HR")
+
+    st.markdown("""
+    **Endpoint** : `GET /api/v1/athlete/{id}/sport-settings`
+
+    Recupere le LTHR et les zones cardiaques specifiques a la course.
+    """)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Requete**")
+        st.markdown("**Reponse API (filtre sur Run)**")
         st.code("""
-GET /api/v1/athlete/{id}/sport-settings
-Authorization: Basic (API_KEY, key)
-        """, language="http")
-
-    with col2:
-        st.markdown("**Reponse (extrait)**")
-        st.code("""
-[
-  {
-    "types": ["Run", "VirtualRun"],
-    "lthr": 167,
-    "max_hr": 185,
-    "hr_zones": [135, 150, 158, 165, 175],
-    "warmup_time": 600,
-    "cooldown_time": 300
-  },
-  {
-    "types": ["Ride"],
-    "lthr": 162,
-    ...
-  }
-]
+{
+  "types": ["Run", "VirtualRun", "TrailRun"],
+  "lthr": 167,
+  "max_hr": 172,
+  "hr_zones": [153, 162, 171, 181, 186, 191, 172],
+  "warmup_time": 300,
+  "cooldown_time": 300
+}
         """, language="json")
 
-    st.markdown("**Champs utilises (filtre sur Run)** :")
-    sport_fields = {
+    with col2:
+        st.markdown("**Utilisation**")
+        st.code("""
+# Priorite LTHR
+lthr = sport_settings.get('lthr')  # 167
+      or athlete.get('lthr')
+      or estimate_lthr(age)  # 220-age
+
+# Calcul zones
+Z1 = (0, lthr * 0.81)      # < 135
+Z2 = (lthr * 0.81, 0.89)   # 135-149
+Z3 = (lthr * 0.90, 0.93)   # 150-155
+Z4 = (lthr * 0.94, 0.99)   # 157-165
+Z5 = (lthr, max_hr)        # 167-172
+        """, language="python")
+
+    sport_detail = {
         "Champ API": ["lthr", "max_hr", "hr_zones"],
+        "Type": ["int (bpm)", "int (bpm)", "list[int]"],
         "Utilisation": [
-            "Seuil lactique HR → Calcul IF, zones",
-            "FC max → Zone 5 plafond",
-            "Bornes des zones (optionnel)"
+            "Seuil lactique → calcul IF, generation zones workout",
+            "Plafond Zone 5",
+            "Zones predefinies (optionnel, on recalcule depuis LTHR)"
         ]
     }
-    st.table(sport_fields)
+    st.table(sport_detail)
 
-    st.info("""
-    **Priorite LTHR** : `sport-settings[Run].lthr` > `athlete.lthr` > estimation (220-age)
-    """)
-
-    st.markdown("---")
-
-    # Schema recapitulatif
-    st.subheader("Schema du flux de donnees")
+    # ========================================
+    # SCHEMA FLUX DE DONNEES
+    # ========================================
+    st.subheader("5. Schema du flux de donnees")
 
     st.code("""
     ┌─────────────────────────────────────────────────────────────────────┐
-    │                         INTERVALS.ICU API                           │
+    │                           COROS PACE 3                              │
+    │         (capteurs: HR, sommeil, GPS, accelerometre)                 │
     └─────────────────────────────────────────────────────────────────────┘
-                    │                           ▲
-                    │ GET                       │ POST
-                    ▼                           │
-    ┌───────────────────────────────┐    ┌─────────────────────────────┐
-    │  LECTURE (analyse)            │    │  ECRITURE                   │
-    ├───────────────────────────────┤    ├─────────────────────────────┤
-    │ • wellness/{date}             │    │ • events (workout J+1)      │
-    │   → CTL, ATL, TSB, FC repos   │    │   → TSS, duree, description │
-    │                               │    │                             │
-    │ • wellness (range)            │    └─────────────────────────────┘
-    │   → Historique, rampRate      │
-    │                               │
-    │ • activities                  │
-    │   → Distribution, pace Z2     │
-    │                               │
-    │ • events                      │
-    │   → Workout existant          │
-    │                               │
-    │ • sport-settings              │
-    │   → LTHR, zones HR            │
-    │                               │
-    │ • athlete                     │
-    │   → Profil (fallback LTHR)    │
-    └───────────────────────────────┘
-                    │
-                    ▼
-    ┌───────────────────────────────┐
-    │  RUNNING COACH (algorithme)   │
-    ├───────────────────────────────┤
-    │ • Readiness score             │
-    │ • Decision RUN/REPOS          │
-    │ • Type seance (EASY/HARD)     │
-    │ • TSS cible (Banister)        │
-    │ • Duree, distance             │
-    │ • Ajustement meteo            │
-    └───────────────────────────────┘
+                                    │
+                                    ▼ sync automatique
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                         INTERVALS.ICU                               │
+    │  Stocke et calcule: CTL, ATL, rampRate, zones HR, historique        │
+    └─────────────────────────────────────────────────────────────────────┘
+                    │                                   ▲
+                    │ GET (6 endpoints)                 │ POST /events
+                    ▼                                   │
+    ┌───────────────────────────────────────────────────────────────────┐
+    │                        RUNNING COACH                              │
+    ├───────────────────────────────────────────────────────────────────┤
+    │  DONNEES RECUES (17 champs utilises)                              │
+    │  ├─ Wellness: ctl, atl, restingHR, hrv, sleepSecs, rampRate       │
+    │  ├─ Activities: type, icu_training_load, pace, distance, avg_hr   │
+    │  └─ Sport-settings: lthr, max_hr                                  │
+    │                                                                   │
+    │  ALGORITHME                                                       │
+    │  ├─ Readiness score (TSB + HR + sommeil + ACWR)                   │
+    │  ├─ Decision RUN/REPOS                                            │
+    │  ├─ Type seance (distribution 80/20)                              │
+    │  └─ TSS cible (Banister)                                          │
+    │                                                                   │
+    │  DONNEES ENVOYEES                                                 │
+    │  └─ POST /events: name, description, load, moving_time            │
+    └───────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼ sync automatique
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                           COROS PACE 3                              │
+    │                    (workout pret sur la montre)                     │
+    └─────────────────────────────────────────────────────────────────────┘
     """, language="text")
-
-    st.markdown("---")
-
-    # Code reference
-    st.subheader("Reference code : IntervalsAPI")
-
-    st.markdown("**Classe complete dans `main.py`** :")
-
-    st.code("""
-class IntervalsAPI:
-    BASE_URL = "https://intervals.icu"
-
-    def __init__(self, athlete_id, api_key):
-        self.auth = ("API_KEY", api_key)
-        self.athlete_url = f"{self.BASE_URL}/api/v1/athlete/{athlete_id}"
-
-    def get_wellness(self, for_date: date) -> dict:
-        # GET /wellness/{date}
-        # Retourne: {ctl, atl, tsb, resting_hr, hrv}
-
-    def get_wellness_range(self, start: date, end: date) -> list:
-        # GET /wellness?oldest=...&newest=...
-        # Retourne: [{date, ctl, atl, tsb, sleep_hours, ramp_rate}, ...]
-
-    def get_athlete_info(self) -> dict:
-        # GET /athlete/{id}
-        # Retourne: profil complet
-
-    def get_activities(self, start: date, end: date) -> list:
-        # GET /activities?oldest=...&newest=...
-        # Retourne: liste des activites
-
-    def get_events(self, start: date, end: date) -> list:
-        # GET /events?oldest=...&newest=...
-        # Retourne: liste des evenements planifies
-
-    def create_workout(self, workout_data: dict) -> dict:
-        # POST /events
-        # Cree un workout, retourne l'evenement cree
-
-    def get_sport_settings(self, sport_type="Run") -> dict:
-        # GET /sport-settings
-        # Retourne: {lthr, max_hr, hr_zones} pour le sport
-    """, language="python")
-
-    st.markdown("---")
 
     st.info("""
     **Documentation officielle** : [intervals.icu/api/v1/docs](https://intervals.icu/api/v1/docs)
