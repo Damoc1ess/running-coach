@@ -73,6 +73,15 @@ class NextWorkoutResponse(BaseModel):
     weather: Optional[WeatherInfo] = None
 
 
+class TodayWorkoutResponse(BaseModel):
+    date: str
+    name: str
+    type: str
+    tss: int
+    description: Optional[str] = None
+    from_intervals: bool = True
+
+
 class ActivityRecord(BaseModel):
     date: str
     name: str
@@ -89,6 +98,16 @@ class WellnessRecord(BaseModel):
     ctl: float
     atl: float
     tsb: float
+    resting_hr: Optional[int] = None
+    hrv: Optional[float] = None
+
+
+class WellnessRecordWithACWR(BaseModel):
+    date: str
+    ctl: float
+    atl: float
+    tsb: float
+    acwr: float
     resting_hr: Optional[int] = None
     hrv: Optional[float] = None
 
@@ -200,6 +219,15 @@ def get_next_workout():
     return NextWorkoutResponse(**workout)
 
 
+@app.get("/api/today-workout")
+def get_today_workout():
+    """Retourne le workout planifie pour aujourd'hui (depuis Intervals.icu)."""
+    workout = main.get_today_workout()
+    if workout:
+        return TodayWorkoutResponse(**workout)
+    return {"message": "Pas de workout aujourd'hui", "type": "rest", "tss": 0}
+
+
 @app.get("/api/activities", response_model=List[ActivityRecord])
 def get_activities(days: int = 30):
     """
@@ -224,6 +252,18 @@ def get_wellness_history(days: int = 30):
     return [WellnessRecord(**w) for w in history]
 
 
+@app.get("/api/wellness-history-acwr", response_model=List[WellnessRecordWithACWR])
+def get_wellness_history_acwr(days: int = 30):
+    """
+    Retourne l'historique wellness avec ACWR calcule pour chaque jour.
+
+    Args:
+        days: Nombre de jours d'historique (defaut: 30)
+    """
+    history = main.get_wellness_history_with_acwr(days)
+    return [WellnessRecordWithACWR(**w) for w in history]
+
+
 @app.get("/api/weekly-tss", response_model=List[WeeklyStats])
 def get_weekly_tss(weeks: int = 8):
     """
@@ -234,6 +274,45 @@ def get_weekly_tss(weeks: int = 8):
     """
     stats = main.get_weekly_tss(weeks)
     return [WeeklyStats(**s) for s in stats]
+
+
+# ========================================
+# READINESS SCORE (Algorithme Scientifique)
+# ========================================
+class ReadinessComponent(BaseModel):
+    value: Optional[float] = None
+    modifier: float
+    threshold: Optional[str] = None
+    baseline: Optional[float] = None
+    elevation: Optional[float] = None
+    avg_3d: Optional[float] = None
+    last_night: Optional[float] = None
+    note: Optional[str] = None
+
+
+class ReadinessResponse(BaseModel):
+    readiness_score: float
+    status: str
+    date: str
+    components: dict
+    recommendations: List[str]
+
+
+@app.get("/api/readiness", response_model=ReadinessResponse)
+def get_readiness():
+    """
+    Retourne le readiness score base sur algorithme scientifique multi-facteurs.
+
+    Sources scientifiques:
+    - Banister (1975): Modele impulse-response CTL/ATL/TSB
+    - PMC Sleep Studies: Seuil deficit sommeil < 6h cumule
+    - Runners Connect / Outside: Seuil FC repos +5-7 bpm
+    - Meta-analysis 2025: ACWR zone optimale 0.8-1.3
+    """
+    readiness = main.get_readiness_score()
+    if 'error' in readiness:
+        raise HTTPException(status_code=503, detail=readiness['error'])
+    return ReadinessResponse(**readiness)
 
 
 # ========================================

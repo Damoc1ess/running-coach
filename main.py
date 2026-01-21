@@ -121,13 +121,16 @@ class IntervalsAPI:
             data = response.json()
             result = []
             for item in data:
+                sleep_secs = item.get('sleepSecs')
                 result.append({
                     "date": item.get('id'),
                     "ctl": item.get('ctl') or 0,
                     "atl": item.get('atl') or 0,
                     "tsb": (item.get('ctl') or 0) - (item.get('atl') or 0),
                     "resting_hr": item.get('restingHR'),
-                    "hrv": item.get('hrv')
+                    "hrv": item.get('hrv'),
+                    "sleep_hours": round(sleep_secs / 3600, 2) if sleep_secs else None,
+                    "ramp_rate": item.get('rampRate')
                 })
             return result
         except Exception as e:
@@ -340,6 +343,198 @@ def calculate_heat_adjustment(weather_data):
 
 
 # ==============================================================================
+# --- READINESS SCORE (ALGORITHME SCIENTIFIQUE) ---
+# ==============================================================================
+def calculate_readiness_score(wellness_history: list) -> dict:
+    """
+    Calcule un score de préparation basé sur des seuils scientifiques validés.
+
+    Sources scientifiques:
+    - Banister (1975): Modèle impulse-response CTL/ATL/TSB
+    - PMC Sleep Studies: Seuil déficit sommeil < 6h cumulé
+    - Runners Connect / Outside: Seuil FC repos +5-7 bpm
+    - Intervals.icu: RampRate > 2.0 = progression trop rapide
+
+    Retourne un dict avec:
+    - readiness_score: multiplicateur de charge (0.5 à 1.1)
+    - components: détail de chaque facteur
+    - recommendations: conseils basés sur les données
+    """
+    from statistics import median, mean
+
+    if not wellness_history or len(wellness_history) < 1:
+        return {
+            "readiness_score": 1.0,
+            "components": {},
+            "recommendations": ["Données insuffisantes pour l'analyse"]
+        }
+
+    today = wellness_history[-1]
+    recommendations = []
+    components = {}
+
+    # =========================================================================
+    # 1. TSB (Training Stress Balance) - Modèle Banister validé
+    # =========================================================================
+    tsb = today.get('tsb', today.get('ctl', 0) - today.get('atl', 0))
+
+    if tsb < -25:
+        tsb_modifier = 0.5
+        recommendations.append("TSB très bas (<-25): repos recommandé (surentraînement)")
+    elif tsb < -15:
+        tsb_modifier = 0.75
+        recommendations.append("TSB bas (<-15): réduire l'intensité")
+    elif tsb < -5:
+        tsb_modifier = 0.9
+        recommendations.append("TSB modérément négatif: charge normale possible")
+    elif tsb < 10:
+        tsb_modifier = 1.0
+    else:
+        tsb_modifier = 1.0
+        recommendations.append("TSB positif: bien reposé, prêt pour séance intense")
+
+    components['tsb'] = {
+        'value': round(tsb, 1),
+        'modifier': tsb_modifier,
+        'threshold': 'Banister model: TSB < -25 = overtraining'
+    }
+
+    # =========================================================================
+    # 2. FC Repos - Élévation vs baseline (seuil scientifique: +5-7 bpm)
+    # Sources: Runners Connect, Outside Online, études 1985/2015
+    # =========================================================================
+    hr_values = [w.get('resting_hr') for w in wellness_history[-14:] if w.get('resting_hr')]
+
+    if hr_values and len(hr_values) >= 3:
+        baseline_hr = median(hr_values)
+        current_hr = today.get('resting_hr', baseline_hr)
+        hr_elevation = current_hr - baseline_hr if current_hr else 0
+
+        if hr_elevation >= 7:
+            hr_modifier = 0.7
+            recommendations.append(f"FC repos élevée (+{hr_elevation:.0f} bpm vs baseline): récupération insuffisante")
+        elif hr_elevation >= 5:
+            hr_modifier = 0.85
+            recommendations.append(f"FC repos légèrement élevée (+{hr_elevation:.0f} bpm): vigilance")
+        else:
+            hr_modifier = 1.0
+
+        components['resting_hr'] = {
+            'value': current_hr,
+            'baseline': round(baseline_hr, 1),
+            'elevation': round(hr_elevation, 1),
+            'modifier': hr_modifier,
+            'threshold': 'Scientific: +5 bpm = warning, +7 bpm = not recovered'
+        }
+    else:
+        hr_modifier = 1.0
+        components['resting_hr'] = {'value': None, 'modifier': 1.0, 'note': 'Données insuffisantes'}
+
+    # =========================================================================
+    # 3. Sommeil - Moyenne 3 jours (dette cumulée, pas une seule nuit)
+    # Sources: PMC Sleep and Athletic Performance, Gatorade SSI
+    # Seuil: < 6h en moyenne = déficit dangereux
+    # =========================================================================
+    sleep_values = [w.get('sleep_hours') for w in wellness_history[-3:] if w.get('sleep_hours')]
+
+    if sleep_values:
+        avg_sleep_3d = mean(sleep_values)
+
+        if avg_sleep_3d < 6.0:
+            sleep_modifier = 0.75
+            recommendations.append(f"Dette de sommeil ({avg_sleep_3d:.1f}h/nuit sur 3j): réduire la charge")
+        elif avg_sleep_3d < 7.0:
+            sleep_modifier = 0.90
+            recommendations.append(f"Sommeil insuffisant ({avg_sleep_3d:.1f}h/nuit): récupération compromise")
+        elif avg_sleep_3d >= 8.5:
+            sleep_modifier = 1.05
+            recommendations.append(f"Excellent sommeil ({avg_sleep_3d:.1f}h/nuit): prêt pour plus de charge")
+        else:
+            sleep_modifier = 1.0
+
+        components['sleep'] = {
+            'avg_3d': round(avg_sleep_3d, 1),
+            'last_night': sleep_values[-1] if sleep_values else None,
+            'modifier': sleep_modifier,
+            'threshold': 'Scientific: <6h avg = dangerous deficit, 7-9h = recommended'
+        }
+    else:
+        sleep_modifier = 1.0
+        components['sleep'] = {'value': None, 'modifier': 1.0, 'note': 'Données non disponibles'}
+
+    # =========================================================================
+    # 4. RampRate - Progression trop rapide (seuil > 2.0)
+    # Source: Intervals.icu, principe de progression progressive
+    # =========================================================================
+    ramp_rate = today.get('ramp_rate', 0)
+
+    if ramp_rate and ramp_rate > 2.0:
+        ramp_modifier = 0.85
+        recommendations.append(f"Progression rapide (rampRate={ramp_rate:.1f}): risque de blessure")
+    elif ramp_rate and ramp_rate < -0.5:
+        ramp_modifier = 1.0
+        recommendations.append(f"RampRate négatif ({ramp_rate:.1f}): désentraînement en cours")
+    else:
+        ramp_modifier = 1.0
+
+    components['ramp_rate'] = {
+        'value': round(ramp_rate, 2) if ramp_rate else None,
+        'modifier': ramp_modifier,
+        'threshold': 'Scientific: >2.0 = too fast progression'
+    }
+
+    # =========================================================================
+    # 5. ACWR (Acute:Chronic Workload Ratio) - Informatif mais controversé
+    # Source: Meta-analysis 2025, zone optimale 0.8-1.3
+    # Note: Utilisé comme indicateur, pas comme facteur décisif
+    # =========================================================================
+    ctl = today.get('ctl', 0)
+    atl = today.get('atl', 0)
+    acwr = atl / ctl if ctl > 0 else 1.0
+
+    if acwr > 1.5:
+        acwr_modifier = 0.8
+        recommendations.append(f"ACWR élevé ({acwr:.2f}): risque de blessure accru")
+    elif acwr > 1.3:
+        acwr_modifier = 0.9
+        recommendations.append(f"ACWR zone attention ({acwr:.2f}): surveiller")
+    elif acwr < 0.8:
+        acwr_modifier = 1.0
+        recommendations.append(f"ACWR bas ({acwr:.2f}): sous-entraînement possible")
+    else:
+        acwr_modifier = 1.0
+
+    components['acwr'] = {
+        'value': round(acwr, 2),
+        'modifier': acwr_modifier,
+        'threshold': 'Meta-analysis 2025: 0.8-1.3 = optimal, >1.5 = high risk'
+    }
+
+    # =========================================================================
+    # Score final = produit des modificateurs
+    # =========================================================================
+    final_score = tsb_modifier * hr_modifier * sleep_modifier * ramp_modifier * acwr_modifier
+    final_score = max(0.5, min(1.1, final_score))
+
+    # Interprétation du score
+    if final_score >= 1.0:
+        status = "Prêt"
+    elif final_score >= 0.85:
+        status = "Modéré"
+    elif final_score >= 0.7:
+        status = "Prudence"
+    else:
+        status = "Repos recommandé"
+
+    return {
+        "readiness_score": round(final_score, 2),
+        "status": status,
+        "components": components,
+        "recommendations": recommendations if recommendations else ["Tous les indicateurs sont normaux"]
+    }
+
+
+# ==============================================================================
 # --- ANALYSEUR DE DONNÉES ---
 # ==============================================================================
 class DataAnalyzer:
@@ -512,14 +707,21 @@ class DataAnalyzer:
 # --- MOTEUR DE DÉCISION POLARISÉ ---
 # ==============================================================================
 class PolarizedEngine:
-    """Moteur de décision 100% data-driven avec distribution polarisée."""
+    """Moteur de décision 100% data-driven avec distribution polarisée et readiness score."""
 
-    def __init__(self, config, analyzer, wellness, today):
+    def __init__(self, config, analyzer, wellness, today, wellness_history=None):
         self.config = config
         self.analyzer = analyzer
         self.wellness = wellness
         self.today = today
         self.tomorrow = today + timedelta(days=1)
+        self.wellness_history = wellness_history or []
+
+        # Calcul du readiness score si historique disponible
+        if self.wellness_history:
+            self.readiness = calculate_readiness_score(self.wellness_history)
+        else:
+            self.readiness = {"readiness_score": 1.0, "status": "N/A", "components": {}, "recommendations": []}
 
         # Paramètres polarisés
         pol_config = config.get('polarized', DEFAULT_CONFIG['polarized'])
@@ -537,7 +739,7 @@ class PolarizedEngine:
         self.tsb_recovery = ban_config.get('tsb_recovery_threshold', -25)
 
     def should_run_tomorrow(self):
-        """Détermine si DEMAIN est un jour de course - 100% basé sur les données."""
+        """Détermine si DEMAIN est un jour de course - basé sur données + readiness score scientifique."""
         tsb = self.wellness['tsb']
         ctl = self.wellness['ctl']
         atl = self.wellness['atl']
@@ -549,19 +751,30 @@ class PolarizedEngine:
         # Calcul du ratio charge aiguë/chronique (ACWR simplifié)
         acwr = atl / ctl if ctl > 0 else 1.0
 
+        # Readiness score (algorithme scientifique multi-facteurs)
+        readiness_score = self.readiness.get('readiness_score', 1.0)
+        readiness_status = self.readiness.get('status', 'N/A')
+
         decision_factors = []
         decision_factors.append(f"TSB: {tsb:.1f}")
         decision_factors.append(f"ACWR: {acwr:.2f}")
+        decision_factors.append(f"Readiness Score: {readiness_score:.2f} ({readiness_status})")
         decision_factors.append(f"Jours depuis run (demain): {days_since}")
 
-        # === RÈGLES 100% DATA-DRIVEN ===
+        # Ajouter les recommandations du readiness score
+        for rec in self.readiness.get('recommendations', []):
+            decision_factors.append(f"  • {rec}")
+
+        # === RÈGLES BASÉES SUR READINESS SCORE SCIENTIFIQUE ===
+
+        # RÈGLE 0: Readiness score très bas → REPOS (basé sur multi-facteurs scientifiques)
+        if readiness_score < 0.6:
+            decision_factors.append("→ REPOS demain (Readiness < 0.6, récupération multi-facteurs)")
+            return False, f"Readiness score bas ({readiness_score:.2f}), récupération nécessaire", decision_factors
 
         # RÈGLE 1: Aura couru aujourd'hui → on vérifie si assez de repos
-        # Note: days_since == 1 signifie que le dernier run était aujourd'hui
         if days_since == 1:
-            # Couru aujourd'hui, demain = 1 jour de repos seulement
             decision_factors.append("→ Run aujourd'hui, évaluation repos")
-            # Continue avec les autres règles (ne bloque pas automatiquement)
 
         # RÈGLE 2: TSB très négatif → REPOS (surentraînement)
         if tsb < -25:
@@ -573,6 +786,11 @@ class PolarizedEngine:
             decision_factors.append("→ REPOS demain (ACWR > 1.5, risque blessure)")
             return False, f"ACWR trop élevé ({acwr:.2f}), risque de blessure", decision_factors
 
+        # RÈGLE 3b: Readiness modéré + TSB négatif → REPOS prudent
+        if readiness_score < 0.75 and tsb < -10:
+            decision_factors.append("→ REPOS demain (Readiness < 0.75 + TSB négatif)")
+            return False, f"Readiness modéré ({readiness_score:.2f}) avec TSB négatif", decision_factors
+
         # RÈGLE 4: TSB très positif + plusieurs jours sans run → COURSE (désentraînement)
         if tsb > 15 and days_since >= 3:
             decision_factors.append("→ COURSE demain (TSB > 15, risque désentraînement)")
@@ -583,10 +801,10 @@ class PolarizedEngine:
             decision_factors.append("→ COURSE demain (TSB > 5, bien récupéré)")
             return True, f"Récupéré (TSB {tsb:.1f})", decision_factors
 
-        # RÈGLE 6: TSB modérément négatif mais assez de repos → COURSE
-        if tsb > -15 and days_since >= 2:
-            decision_factors.append("→ COURSE demain (TSB > -15 et 2j+ repos)")
-            return True, f"TSB acceptable ({tsb:.1f}) après {days_since}j repos demain", decision_factors
+        # RÈGLE 6: TSB modérément négatif mais assez de repos ET readiness OK → COURSE
+        if tsb > -15 and days_since >= 2 and readiness_score >= 0.75:
+            decision_factors.append("→ COURSE demain (TSB > -15, 2j+ repos, readiness OK)")
+            return True, f"TSB acceptable ({tsb:.1f}) et readiness OK ({readiness_score:.2f})", decision_factors
 
         # RÈGLE 7: Beaucoup de jours sans run → COURSE (même si fatigué)
         if days_since >= 4:
@@ -603,7 +821,7 @@ class PolarizedEngine:
         return False, "Récupération par défaut", decision_factors
 
     def calculate_target_tss(self):
-        """Calcule le TSS cible basé sur le modèle Banister."""
+        """Calcule le TSS cible basé sur le modèle Banister, ajusté par le readiness score."""
         ctl = self.wellness['ctl']
         atl = self.wellness['atl']
 
@@ -624,10 +842,21 @@ class PolarizedEngine:
 
         reason = "TSB" if tss_for_tsb <= tss_cap else "ALB cap"
 
+        # Appliquer le readiness score comme modificateur
+        readiness_score = self.readiness.get('readiness_score', 1.0)
+        original_tss = final_tss
+        final_tss = round(final_tss * readiness_score)
+        final_tss = max(20, final_tss)  # Minimum 20 TSS après ajustement
+
+        if readiness_score < 1.0:
+            reason += f" + Readiness ({readiness_score:.0%})"
+
         return {
             "target_tss": round(final_tss),
+            "original_tss": round(original_tss),
             "tss_for_tsb": round(tss_for_tsb),
             "tss_cap": round(tss_cap),
+            "readiness_modifier": readiness_score,
             "reason": reason
         }
 
@@ -938,6 +1167,24 @@ def get_distribution(days: int = 21) -> dict:
     }
 
 
+def get_readiness_score() -> dict:
+    """Retourne le readiness score basé sur algorithme scientifique multi-facteurs."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return {"error": "API non configurée"}
+
+    # Récupérer 14 jours d'historique pour le calcul
+    start_date = today - timedelta(days=14)
+    wellness_history = api.get_wellness_range(start_date, today)
+
+    if not wellness_history:
+        return {"error": "Données wellness non disponibles"}
+
+    readiness = calculate_readiness_score(wellness_history)
+    readiness['date'] = today.isoformat()
+    return readiness
+
+
 def get_next_workout_info() -> dict:
     """Retourne les informations sur la prochaine séance planifiée."""
     config, today, api, weather_api_key, _ = _get_initialized_components()
@@ -951,6 +1198,9 @@ def get_next_workout_info() -> dict:
     if not wellness:
         return {"error": "Données wellness non disponibles"}
 
+    # Récupérer l'historique wellness pour le readiness score (14 jours)
+    wellness_history = api.get_wellness_range(today - timedelta(days=14), today)
+
     athlete_info = api.get_athlete_info()
     activities = api.get_activities(today - timedelta(days=60), today)
 
@@ -962,7 +1212,7 @@ def get_next_workout_info() -> dict:
         athlete_info['max_hr'] = sport_settings['max_hr']
 
     analyzer = DataAnalyzer(activities, athlete_info)
-    engine = PolarizedEngine(config, analyzer, wellness, today)
+    engine = PolarizedEngine(config, analyzer, wellness, today, wellness_history)
 
     # Décision course/repos
     should_run, reason, factors = engine.should_run_tomorrow()
@@ -1019,6 +1269,49 @@ def get_next_workout_info() -> dict:
     }
 
 
+def get_today_workout() -> dict:
+    """Récupère le workout planifié pour aujourd'hui depuis Intervals.icu."""
+    config, today, api, _, _ = _get_initialized_components()
+    if not api:
+        return None
+
+    events = api.get_events(today, today)
+    for event in events:
+        if event.get('category') == 'WORKOUT' and 'Run' in str(event.get('type', '')):
+            name = event.get('name', '')
+
+            # Extraire TSS du nom (format: "XX TSS - Type")
+            tss = 0
+            if 'TSS' in name:
+                try:
+                    tss = int(name.split('TSS')[0].strip())
+                except ValueError:
+                    tss = event.get('load', 0)
+            else:
+                tss = event.get('load', 0)
+
+            # Extraire type du nom
+            workout_type = 'easy'
+            name_lower = name.lower()
+            if 'récup' in name_lower or 'recup' in name_lower:
+                workout_type = 'recovery'
+            elif 'long' in name_lower:
+                workout_type = 'long_run'
+            elif 'fractionné' in name_lower or 'vo2' in name_lower or 'interval' in name_lower:
+                workout_type = 'intervals'
+
+            return {
+                "date": event.get('start_date_local', today.isoformat())[:10],
+                "name": name,
+                "type": workout_type,
+                "tss": tss,
+                "description": event.get('description', ''),
+                "from_intervals": True
+            }
+
+    return None
+
+
 def get_activity_history(days: int = 60) -> list:
     """Retourne l'historique des activités sur N jours."""
     config, today, api, _, _ = _get_initialized_components()
@@ -1055,6 +1348,16 @@ def get_wellness_history(days: int = 30) -> list:
     wellness_data = api.get_wellness_range(start_date, today)
 
     return wellness_data
+
+
+def get_wellness_history_with_acwr(days: int = 30) -> list:
+    """Retourne l'historique wellness avec ACWR calcule pour chaque jour."""
+    history = get_wellness_history(days)
+    for item in history:
+        ctl = item.get('ctl', 0)
+        atl = item.get('atl', 0)
+        item['acwr'] = round(atl / ctl, 2) if ctl > 0 else 1.0
+    return history
 
 
 def get_weekly_tss(weeks: int = 8) -> list:
@@ -1127,6 +1430,9 @@ def main():
         print("Erreur: Impossible de recuperer wellness")
         return
 
+    # Récupérer l'historique wellness pour le readiness score (14 jours)
+    wellness_history = api.get_wellness_range(today - timedelta(days=14), today)
+
     athlete_info = api.get_athlete_info()
     activities = api.get_activities(today - timedelta(days=60), today)
 
@@ -1148,8 +1454,16 @@ def main():
     print(f"\nEtat actuel:")
     print(f"  CTL: {wellness['ctl']:.1f} | ATL: {wellness['atl']:.1f} | TSB: {wellness['tsb']:.1f}")
 
+    # Calcul du readiness score
+    readiness = calculate_readiness_score(wellness_history)
+    print(f"  Readiness Score: {readiness['readiness_score']:.2f} ({readiness['status']})")
+    if readiness['components'].get('sleep', {}).get('avg_3d'):
+        print(f"  Sommeil (3j): {readiness['components']['sleep']['avg_3d']:.1f}h/nuit")
+    if readiness['components'].get('resting_hr', {}).get('baseline'):
+        print(f"  FC repos: {readiness['components']['resting_hr'].get('value')} bpm (baseline: {readiness['components']['resting_hr']['baseline']:.0f})")
+
     # Moteur de décision
-    engine = PolarizedEngine(config, analyzer, wellness, today)
+    engine = PolarizedEngine(config, analyzer, wellness, today, wellness_history)
 
     # Étape 1: Jour de course DEMAIN? (100% data-driven)
     should_run, reason, factors = engine.should_run_tomorrow()
