@@ -437,14 +437,14 @@ Fichier `config.json` :
 ### Déploiement
 
 #### Serveur Homelab
-- **Adresse** : `192.168.1.42`
+- **Adresse** : `votre-serveur.local`
 - **Chemin** : `~/running-coach/`
 - **Cron** : Tous les jours à **21h** (après les courses du jour)
 - **Credentials** : Fichier `.env` local
 
 ```bash
 # Connexion
-ssh florent@192.168.1.42
+ssh user@votre-serveur.local
 
 # Structure
 ~/running-coach/
@@ -455,7 +455,7 @@ ssh florent@192.168.1.42
 └── log.txt         # Logs
 
 # Cron configuré (21h pour avoir les données du jour)
-0 21 * * * /home/florent/running-coach/run.sh
+0 21 * * * /home/user/running-coach/run.sh
 ```
 
 **Pourquoi 21h ?** Le script analyse les données du jour pour décider de demain.

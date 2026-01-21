@@ -70,9 +70,9 @@ DEFAULT_CONFIG = {
     "weather": {
         "enabled": True,
         "location": {
-            "name": "Lamorteau, Belgique",
-            "lat": 49.55,
-            "lon": 5.35
+            "name": "Paris, France",
+            "lat": 48.85,
+            "lon": 2.35
         },
         "workout_hour": 7  # Heure prévue du workout pour la prévision
     }
