@@ -982,6 +982,57 @@ class WorkoutBuilder:
         self.analyzer = analyzer
         self.templates = config.get('workout_templates', DEFAULT_CONFIG['workout_templates'])
 
+    def _generate_workout_doc(self, workout_type, duration_min):
+        """
+        Génère le workout_doc structuré pour Intervals.icu/Coros.
+        
+        Format Intervals.icu:
+        - Xm ZY pour une étape (X minutes en zone Y)
+        
+        Note: Les répétitions sont déployées explicitement car Intervals.icu
+        ne parse pas correctement le format Nx avec sous-étapes.
+        """
+        main_duration = duration_min - 20  # Enlever échauffement/retour au calme
+        main_duration = max(10, main_duration)
+        
+        if workout_type == "recovery":
+            # Récupération simple en zone 1-2
+            return f"- {duration_min}m Z1"
+        
+        elif workout_type == "easy":
+            # Facile: 5m Z1 + durée principale Z2 + 5m Z1
+            return f"- 5m Z1\n- {main_duration}m Z2\n- 5m Z1"
+        
+        elif workout_type == "long_run":
+            # Long: 10m Z1 + durée principale Z2 + 10m Z1
+            return f"- 10m Z1\n- {main_duration}m Z2\n- 10m Z1"
+        
+        elif workout_type == "intervals":
+            # Intervalles courts: 15m Z2 + N*(1m Z5 + 1m Z1) + 10m Z1
+            reps = max(4, min(12, main_duration // 3))
+            doc = "- 15m Z2\n"
+            # Déployer les répétitions explicitement
+            for _ in range(reps):
+                doc += "- 1m Z5\n"
+                doc += "- 1m Z1\n"
+            doc += "- 10m Z1"
+            return doc
+        
+        elif workout_type == "intervals_long":
+            # Intervalles longs: 15m Z2 + N*(4m Z4 + 2m Z1) + 10m Z1
+            reps = max(3, min(6, main_duration // 6))
+            doc = "- 15m Z2\n"
+            # Déployer les répétitions explicitement
+            for _ in range(reps):
+                doc += "- 4m Z4\n"
+                doc += "- 2m Z1\n"
+            doc += "- 10m Z1"
+            return doc
+        
+        else:
+            # Défaut: séance facile
+            return f"- {duration_min}m Z2"
+
     def build(self, workout_type, target_tss, duration_min, distance_km,
               wellness, decision_log, workout_date, weather_info=None):
         """Construit le workout complet."""
@@ -1055,14 +1106,19 @@ Etat actuel:
 {weather_text}
 Objectifs:
 * TSS cible: {target_tss}
-* Duree: {duration_min} min
-* Distance estimee: {distance_km} km
+* Duree cible: environ {duration_min} minutes
+* Distance estimee: {distance_km} kilometres
 {zones_text}
 ---
 Running Coach v{VERSION} - Polarized Data-Driven
 """
 
-        description = structure + rationale
+        # Générer le format structuré pour Intervals.icu/Coros
+        workout_doc = self._generate_workout_doc(workout_type, duration_min)
+        
+        # La description commence par le format structuré (parsé par Intervals.icu)
+        # Le séparateur "---" et texte "Notes:" indique la fin des steps
+        description = workout_doc + "\n\n---\nNotes:" + rationale
 
         workout_datetime = datetime.combine(workout_date, time(7, 0))
 
